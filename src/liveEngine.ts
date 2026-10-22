@@ -155,8 +155,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const optionsRef = useRef({ serverId, protocol, port, netlock });
   const connectTimer = useRef<number | null>(null);
   // Eddie's per-session `act=connect` authorization needs the account
-  // credentials, so keep them in memory for this app session. They are never
-  // written to the profile.
+  // credentials, so keep them in memory for this app session. They are handed
+  // to Eddie over stdin and cleared from its profile on a clean shutdown.
   const credentialsRef = useRef<{ login: string; password: string } | null>(null);
   const pollTimer = useRef<number | null>(null);
   const mounted = useRef(true);
@@ -170,19 +170,18 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     restoredCredentials.current = true;
     const account = (localStorage.getItem("nimbus.login") ?? "").trim();
     if (!account) return;
-    let cancelled = false;
+    // Do not cancel this on StrictMode's simulated unmount. The first effect
+    // invocation starts the read and the second returns early because of
+    // `restoredCredentials`, so a cancellation flag would discard the result.
     void invoke<string | null>("credentials_load", { login: account })
       .then((stored) => {
-        if (cancelled || !mounted.current || !stored) return;
+        if (!mounted.current || !stored) return;
         credentialsRef.current = { login: account, password: stored };
         setSignedIn(true);
       })
       .catch(() => {
         // A locked or unavailable keyring just means the user signs in again.
       });
-    return () => {
-      cancelled = true;
-    };
   }, [enabled]);
 
   useEffect(() => {
@@ -677,7 +676,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         return;
       }
       // Keep the password in memory for this app session: `act=connect` needs
-      // it for every session, but it is never written to the profile.
+      // it for every session. Eddie may cache it in its encrypted profile
+      // until shutdown, where the engine stop path clears it.
       credentialsRef.current = { login: account, password };
       setPasswordState("");
       setSignedIn(true);

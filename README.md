@@ -4,7 +4,7 @@ An unofficial, Wayland-friendly desktop UI for AirVPN. It **does not touch the V
 core**: it drives the official Eddie engine (`eddie-cli`) instead of reimplementing
 routing, DNS, kill-switch or protocol handling.
 
-> Working title. "Nimbus" is a placeholder — not affiliated with or endorsed by AirVPN.
+> Nimbus is an unofficial client and is not affiliated with or endorsed by AirVPN.
 
 ![Connect screen](docs/connect.png)
 
@@ -64,6 +64,43 @@ design work never touch the network.
 
 Keyboard: `Ctrl/⌘ 1/2/3` switch views, `Ctrl/⌘ K` focuses server search,
 `Esc` clears it.
+
+## Build Linux packages
+
+```bash
+pnpm install
+pnpm tauri build --bundles deb,appimage
+```
+
+Outputs:
+
+```
+src-tauri/target/release/bundle/deb/Nimbus_0.1.0_amd64.deb
+src-tauri/target/release/bundle/appimage/Nimbus_0.1.0_amd64.AppImage
+```
+
+Install the deb with `sudo apt install ./Nimbus_0.1.0_amd64.deb`, or mark the
+AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
+Neither package bundles Eddie; see below. The deb is the recommended format on
+Debian/Ubuntu because the official Eddie engine and its root helper live at a
+stable `/opt/eddie-ui` path.
+
+## Why Eddie is not bundled
+
+`eddie-cli` is not a self-contained binary. It needs the helper, `openvpn`,
+`hummingbird`, `stunnel`, provider resources and the root service from the same
+install directory, and Eddie's integrity gate rejects a copy run from a
+different location (notably an AppImage's changing mount path). A bundled
+AppImage therefore would not actually work as a single-file install.
+
+There are also licence and trust reasons: Eddie is GPL-3.0 and includes
+third-party components with their own terms (including a proprietary
+WireGuard-NT binary on Windows), and AirVPN's trademarks are not granted by the
+GPL. Bundling would make Nimbus responsible for redistributing, updating and
+signing the privileged engine. Keeping Eddie as an official, separately
+installed dependency preserves its integrity checks, update path and security
+fixes. The roadmap item is a first-run **"Eddie not found"** onboarding flow
+that points at the official installer, not a vendored copy.
 
 ## Live engine
 
@@ -226,6 +263,11 @@ is deliberately out of scope for v1.
 
 ## Legal
 
-Eddie is GPL-3.0. If Nimbus reuses or links any Eddie code it must be GPL-3.0 too,
-with source available. The AirVPN and Eddie names/logos are trademarks; ship as
-an unofficial client with your own branding and a clear disclaimer.
+Nimbus is licensed **GPL-3.0-or-later** (see `LICENSE`). It does not include or
+link Eddie code; Eddie is used as a separate process, so Nimbus can be built and
+run with the official engine without modifying it. Eddie itself is GPL-3.0 and
+includes third-party components under their own licences.
+
+The AirVPN and Eddie names/logos are trademarks of AirVPN. Nimbus is an
+unofficial client with its own branding and no endorsement; do not present it as
+an AirVPN release.

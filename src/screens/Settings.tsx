@@ -34,7 +34,7 @@ export function SettingsScreen({
       <div className="settings-scroll">
         <Section
           title="Account"
-          note="Signing in runs Eddie's own login step once and saves the session keys in Nimbus's profile. Your password is kept in your system keyring so Nimbus can reconnect after a restart; it is never written to the profile."
+          note="Signing in runs Eddie's own login step once and saves the session keys in Nimbus's profile. Your password is kept in your system keyring so Nimbus can reconnect after a restart. Nimbus clears it from Eddie's profile when the engine stops."
         >
           <Field title="AirVPN login" desc="Your AirVPN username (not your email address).">
             <input
@@ -50,7 +50,7 @@ export function SettingsScreen({
           </Field>
           <Field
             title="Password"
-            desc="Saved in your system keyring after signing in. It is never written to the Eddie profile, and Nimbus uses it only to authorize connections."
+            desc="Saved in your system keyring after signing in. Nimbus uses it only to authorize connections and clears it from Eddie's profile on shutdown."
           >
             <input
               className="text-input"

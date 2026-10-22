@@ -75,8 +75,8 @@ pnpm tauri build --bundles deb,appimage
 Outputs:
 
 ```
-src-tauri/target/release/bundle/deb/Nimbus_0.1.1_amd64.deb
-src-tauri/target/release/bundle/appimage/Nimbus_0.1.1_amd64.AppImage
+src-tauri/target/release/bundle/deb/Nimbus_0.1.2_amd64.deb
+src-tauri/target/release/bundle/appimage/Nimbus_0.1.2_amd64.AppImage
 ```
 
 On Windows:
@@ -86,11 +86,11 @@ pnpm install
 pnpm exec tauri build --bundles nsis
 ```
 
-Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.1_x64-setup.exe`.
+Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.2_x64-setup.exe`.
 CI builds both platforms with `.github/workflows/build.yml` (artifacts) and
 publishes signed releases from `v*` tags with `.github/workflows/release.yml`.
 
-Install the deb with `sudo apt install ./Nimbus_0.1.1_amd64.deb`, or mark the
+Install the deb with `sudo apt install ./Nimbus_0.1.2_amd64.deb`, or mark the
 AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
 Neither package bundles Eddie. On first launch, if `eddie-cli` is missing,
 Nimbus shows a **one-time engine setup** screen:

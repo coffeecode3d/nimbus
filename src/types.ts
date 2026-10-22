@@ -85,4 +85,13 @@ export interface EngineApi {
   latencyFor: (server: ServerInfo) => number | undefined;
   refreshLatency: () => Promise<void>;
   measuringLatency: boolean;
+  /** Download and install the official Eddie engine, verified against AirVPN's key. */
+  installEngine: () => Promise<void>;
+  installing: boolean;
+  installStage: string | null;
+  installMessage: string | null;
+  installProgress: number | null;
+  installError: string | null;
+  /** Re-run engine discovery after a manual install. */
+  refreshEngine: () => Promise<void>;
 }

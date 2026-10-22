@@ -232,6 +232,15 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     latencyFor: (s: ServerInfo): number | undefined => mockLatency(s),
     refreshLatency: async () => {},
     measuringLatency: false,
+    installEngine: async () => {
+      setError("The real engine is only available in the desktop app.");
+    },
+    installing: false,
+    installStage: null,
+    installMessage: null,
+    installProgress: null,
+    installError: null,
+    refreshEngine: async () => {},
   };
 }
 

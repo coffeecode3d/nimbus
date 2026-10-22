@@ -196,7 +196,7 @@ fn find_cli() -> Option<PathBuf> {
     None
 }
 
-fn locate() -> EngineInfo {
+pub(crate) fn locate() -> EngineInfo {
     let Some(cli) = find_cli() else {
         return EngineInfo::missing(
             "Could not find eddie-cli. Install the official Eddie package, or set NIMBUS_EDDIE_CLI.",

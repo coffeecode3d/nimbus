@@ -45,9 +45,9 @@ Nimbus never talks to root. It spawns the official CLI from its own install
 directory, so the integrity gate is satisfied and the kill switch / DNS / routing
 code stays exactly as AirVPN ships it.
 
-This also means the AppImage is the awkward case: its mount path changes each
-launch, and running a copy from a different directory is refused. A deb/rpm/AUR
-install (stable `/opt/eddie-ui`) is the recommended target for v1.
+Because the engine lives at a stable `/opt/eddie-ui` path, the Nimbus AppImage
+is still a single-file UI: it detects the engine, or offers a one-time setup if
+Eddie is not installed. Nimbus itself never needs to live next to the engine.
 
 ## Run the UI
 
@@ -81,9 +81,25 @@ src-tauri/target/release/bundle/appimage/Nimbus_0.1.0_amd64.AppImage
 
 Install the deb with `sudo apt install ./Nimbus_0.1.0_amd64.deb`, or mark the
 AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
-Neither package bundles Eddie; see below. The deb is the recommended format on
-Debian/Ubuntu because the official Eddie engine and its root helper live at a
-stable `/opt/eddie-ui` path.
+Neither package bundles Eddie. On first launch, if `eddie-cli` is missing,
+Nimbus shows a **one-time engine setup** screen:
+
+1. resolves the official stable Linux build through `eddie.website`;
+2. downloads it and checks its SHA-256 checksum;
+3. verifies AirVPN's detached OpenPGP signature against a pinned key
+   (`239F D950 7903 EA9F BF7D CCF1 C6E3 3885 8A23 9AEC`);
+4. extracts the AppImage and installs Eddie plus its privileged helper to
+   `/opt/eddie-ui`, with one `pkexec` administrator prompt.
+
+Automatic setup currently targets **x86_64 Linux** and needs `pkexec` (polkit),
+`gpg`/`gpgv`, `tar`, and a running polkit agent. Desktop Debian/Ubuntu, Fedora,
+Arch and openSUSE installations normally have these. If the helper service has
+already been installed elsewhere, choose **Check again** after installing Eddie
+manually; Nimbus will use the existing engine.
+
+The deb remains the recommended format on Debian/Ubuntu because desktop
+integration is familiar. The AppImage is the portable option for other distros;
+both use the same external engine.
 
 ## Why Eddie is not bundled
 
@@ -99,8 +115,8 @@ WireGuard-NT binary on Windows), and AirVPN's trademarks are not granted by the
 GPL. Bundling would make Nimbus responsible for redistributing, updating and
 signing the privileged engine. Keeping Eddie as an official, separately
 installed dependency preserves its integrity checks, update path and security
-fixes. The roadmap item is a first-run **"Eddie not found"** onboarding flow
-that points at the official installer, not a vendored copy.
+fixes. The first-run onboarding downloads AirVPN's own signed build instead of
+vendoring a copy; the local installation is the only Eddie copy on the machine.
 
 ## Live engine
 
@@ -110,12 +126,12 @@ stable extraction at `~/.local/opt/eddie/squashfs-root/opt/eddie-ui`, then
 AppImage mounts. The engine is always spawned **from its install directory** so
 Eddie's integrity check accepts it.
 
-The privileged helper is still Eddie's own service. Install or refresh it once
-from the same stable directory (as root):
+The privileged helper is still Eddie's own service. The onboarding installs and
+registers it from the same stable directory. To refresh it manually after a
+manual install (as root):
 
 ```bash
-sudo ~/.local/opt/eddie/squashfs-root/opt/eddie-ui/eddie-cli-elevated \
-  service=install service_port=9350
+sudo /opt/eddie-ui/eddie-cli-elevated service=install service_port=9350
 ```
 
 Nimbus keeps its own profile at `${XDG_DATA_HOME:-~/.local/share}/nimbus/profile`
@@ -233,8 +249,8 @@ inline script, so there is no flash of the wrong theme on launch.
 4. ~~**Keyring** — store the password in the OS keyring so it survives restarts.~~
 5. **Tray + notifications** — StatusNotifier on Wayland; connect/disconnect and
    state colour.
-6. **Packaging** — deb/AppImage that depends on the official Eddie package
-   (`/opt/eddie-ui`), with a clean "Eddie not found" onboarding path.
+6. ~~**Packaging** — deb/AppImage with a verified first-run engine installer
+   (`/opt/eddie-ui`) and "Eddie not found" onboarding.~~
 7. **Network-lock parity** — re-enable it once connect can be proven safe:
    provider allowlist + DNS, automatic disarm on every failure path, and a
    visible "lock is armed" indicator.
@@ -248,8 +264,11 @@ the keyring layer are cross-platform; Tauri uses WebView2 on Windows. The work
 is in `src-tauri/src/engine.rs`, which currently uses Linux-only process
 primitives (`prctl`/`PDEATHSIG`, `SIGTERM`, `/proc` orphan scans), plus CLI
 discovery, installer/packaging and code signing. Expect an MVP port rather than
-a one-line build; a Windows VM is required for testing. The netlock-off policy
-carries over and removes the riskiest platform-specific piece for now.
+a one-line build; a Windows VM is required for testing. The Tauri installer will
+add Nimbus to the Start menu and Apps list; first-run setup can download and run
+AirVPN's official Windows installer under UAC instead of the Linux `pkexec`
+path. The netlock-off policy carries over and removes the riskiest
+platform-specific piece for now.
 
 **Split tunnelling:** Eddie's core has no application/process-based split
 tunnel, and no `split tunnel` code exists in `Lib.Core`. It does support

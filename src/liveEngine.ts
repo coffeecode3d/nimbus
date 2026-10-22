@@ -40,6 +40,12 @@ interface EngineLine {
   line: string;
 }
 
+interface InstallEvent {
+  stage: string;
+  message: string;
+  progress: number | null;
+}
+
 /* ------------------------------------------------------------------ parsing */
 
 export function parseRate(text: string | undefined): number {
@@ -136,6 +142,11 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const [latencies, setLatencies] = useState<Record<string, number>>({});
   const [measuringLatency, setMeasuringLatency] = useState(false);
   const [releasingLock, setReleasingLock] = useState(false);
+  const [installing, setInstalling] = useState(false);
+  const [installStage, setInstallStage] = useState<string | null>(null);
+  const [installMessage, setInstallMessage] = useState<string | null>(null);
+  const [installProgress, setInstallProgress] = useState<number | null>(null);
+  const [installError, setInstallError] = useState<string | null>(null);
 
   // Network lock is disabled until the tunnel has been validated end to end.
   // Eddie only arms or disarms it during engine startup, and a session that
@@ -571,6 +582,29 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     };
   }, [enabled, handleLine]);
 
+  // The installer streams progress from the Rust side. Listening once at mount
+  // avoids missing the first event between the click and a per-call listener.
+  useEffect(() => {
+    if (!enabled) return;
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void listen<InstallEvent>("engine://install", (event) => {
+      if (disposed) return;
+      const payload = event.payload;
+      setInstallStage(payload.stage);
+      setInstallMessage(payload.message);
+      setInstallProgress(payload.progress);
+      if (payload.stage === "error") setInstallError(payload.message);
+    }).then((stop) => {
+      if (disposed) stop();
+      else unlisten = stop;
+    });
+    return () => {
+      disposed = true;
+      unlisten?.();
+    };
+  }, [enabled]);
+
   // Poll the engine's stats once per second while it is ready. `stats.list`
   // is the one command this Eddie build reliably answers over jsoninout.
   useEffect(() => {
@@ -714,6 +748,56 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     }
   }, [login]);
 
+  const installEngine = useCallback(async () => {
+    if (installing) return;
+    setInstalling(true);
+    setInstallError(null);
+    setInstallStage("starting");
+    setInstallMessage("Preparing the official engine…");
+    setInstallProgress(null);
+    try {
+      const value = await invoke<EngineInfo>("engine_install");
+      if (!mounted.current) return;
+      setInfo(value);
+      setStatus(value.found ? "idle" : "absent");
+      if (value.found) {
+        setInstallStage("done");
+        setInstallMessage("The engine is ready.");
+        setInstallProgress(100);
+        setError(null);
+      } else {
+        setInstallError(
+          value.error ??
+            "The installer finished, but Nimbus could not find eddie-cli. Restart Nimbus and try again.",
+        );
+      }
+    } catch (err) {
+      if (mounted.current) setInstallError(String(err));
+    } finally {
+      if (mounted.current) setInstalling(false);
+    }
+  }, [installing]);
+
+  const refreshEngine = useCallback(async () => {
+    setInstallError(null);
+    try {
+      const value = await invoke<EngineInfo>("engine_info");
+      if (!mounted.current) return;
+      setInfo(value);
+      setStatus(value.found ? "idle" : "absent");
+      if (value.found) {
+        setError(null);
+        setInstallStage(null);
+        setInstallMessage(null);
+        setInstallProgress(null);
+      } else if (value.error) {
+        setError(value.error);
+      }
+    } catch (err) {
+      if (mounted.current) setInstallError(String(err));
+    }
+  }, []);
+
   const retry = useCallback(() => {
     void start(optionsRef.current, false);
   }, [start]);
@@ -821,6 +905,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     latencyFor,
     refreshLatency,
     measuringLatency,
+    installEngine,
+    installing,
+    installStage,
+    installMessage,
+    installProgress,
+    installError,
+    refreshEngine,
   };
 }
 

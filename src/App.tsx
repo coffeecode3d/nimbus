@@ -6,6 +6,7 @@ import serversJson from "./servers.json";
 import type { ServerInfo } from "./types";
 import { BrandMark, ChevronRight, Globe, Moon, Power, Sliders, Sun } from "./icons";
 import { ConnectScreen } from "./screens/Connect";
+import { EngineSetup } from "./screens/EngineSetup";
 import { ServersScreen } from "./screens/Servers";
 import { SettingsScreen } from "./screens/Settings";
 
@@ -54,6 +55,12 @@ export function App() {
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // The engine is a separate installation by design. On a fresh machine the
+  // setup screen owns the whole window until eddie-cli is available.
+  if (engine.mode === "live" && engine.status === "absent") {
+    return <EngineSetup engine={engine} />;
+  }
 
   return (
     <div className="app">

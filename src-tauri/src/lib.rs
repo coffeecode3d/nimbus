@@ -1,5 +1,6 @@
 mod credentials;
 mod engine;
+mod installer;
 
 use tauri::Manager;
 
@@ -12,6 +13,7 @@ pub fn run() {
       credentials::credentials_load,
       credentials::credentials_delete,
       engine::engine_info,
+      installer::engine_install,
       engine::engine_start,
       engine::engine_authenticate,
       engine::engine_disarm,

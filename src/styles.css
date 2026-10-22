@@ -252,6 +252,15 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+.nav-badge {
+  width: 7px;
+  height: 7px;
+  margin-left: auto;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 .rail-spacer {
   flex: 1;
 }
@@ -1399,6 +1408,94 @@ body,
   color: var(--text-dim);
   font-family: var(--mono);
   font-size: 10px;
+}
+
+.update-panel {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+}
+
+.update-panel.is-error {
+  background: color-mix(in srgb, var(--bad) 7%, var(--surface));
+}
+
+.update-panel.is-current {
+  background: color-mix(in srgb, var(--ok) 5%, var(--surface));
+}
+
+.update-copy {
+  min-width: 0;
+}
+
+.update-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.update-panel.is-error .update-title {
+  color: var(--bad);
+}
+
+.update-desc {
+  max-width: 54ch;
+  margin: 3px 0 0;
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.5;
+}
+
+.update-notes {
+  max-height: 92px;
+  margin: 7px 0 0;
+  overflow-y: auto;
+  padding-right: 4px;
+  color: var(--faint);
+  font-size: 10.5px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+.update-actions {
+  flex: none;
+  padding-top: 1px;
+}
+
+.update-progress-wrap {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 9px;
+}
+
+.update-progress {
+  width: 180px;
+  height: 4px;
+  overflow: hidden;
+  border-radius: 99px;
+  background: var(--inset);
+}
+
+.update-progress span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 0.2s ease;
+}
+
+.update-progress-label {
+  color: var(--faint);
+  font-family: var(--mono);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 
 .segmented {

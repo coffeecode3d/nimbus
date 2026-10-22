@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useEngine } from "./engine";
+import { useUpdates } from "./updates";
 import { useAppearance } from "./appearance";
 import type { View } from "./types";
 import serversJson from "./servers.json";
@@ -26,6 +27,7 @@ function accountInitials(login: string, mode: "live" | "mock"): string {
 
 export function App() {
   const engine = useEngine(servers);
+  const updates = useUpdates(engine.mode === "live");
   const appearance = useAppearance();
   const [view, setView] = useState<View>(() => {
     const q = new URLSearchParams(window.location.search).get("view");
@@ -45,6 +47,13 @@ export function App() {
       if (toastTimer.current !== null) window.clearTimeout(toastTimer.current);
     };
   }, []);
+
+  const announcedUpdate = useRef<string | null>(null);
+  useEffect(() => {
+    if (!updates.info || announcedUpdate.current === updates.info.version) return;
+    announcedUpdate.current = updates.info.version;
+    notify(`Nimbus ${updates.info.version} is available`);
+  }, [updates.info, notify]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -87,6 +96,13 @@ export function App() {
               <Icon size={18} />
               <span className="nav-label">{label}</span>
               {id === "servers" && <span className="nav-count">{servers.length}</span>}
+              {id === "settings" && updates.info && (
+                <span
+                  className="nav-badge"
+                  title={`Nimbus ${updates.info.version} is available`}
+                  aria-label="Update available"
+                />
+              )}
             </button>
           ))}
         </nav>
@@ -138,7 +154,12 @@ export function App() {
         )}
         {view === "servers" && <ServersScreen engine={engine} notify={notify} />}
         {view === "settings" && (
-          <SettingsScreen engine={engine} appearance={appearance} notify={notify} />
+          <SettingsScreen
+            engine={engine}
+            appearance={appearance}
+            updates={updates}
+            notify={notify}
+          />
         )}
       </main>
 

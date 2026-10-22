@@ -64,6 +64,8 @@ export interface EngineApi {
   toggleFavorite: (id: string) => void;
   connect: () => void;
   disconnect: () => void;
+  /** Stop the engine before the app replaces itself with an update. */
+  stopForUpdate: () => Promise<void>;
   toggle: () => void;
   selectServer: (id: string) => void;
   connected: boolean;

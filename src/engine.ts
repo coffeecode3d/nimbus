@@ -209,6 +209,11 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     toggleFavorite,
     connect,
     disconnect,
+    stopForUpdate: async () => {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      setState("disconnected");
+      setStats(initial("disconnected"));
+    },
     toggle,
     selectServer,
     connected,

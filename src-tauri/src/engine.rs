@@ -75,15 +75,29 @@ impl Default for EngineState {
     }
 }
 
+#[cfg(not(windows))]
 fn home_dir() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
+#[cfg(windows)]
+fn home_dir() -> PathBuf {
+    std::env::var_os("USERPROFILE")
+        .map(PathBuf::from)
+        .or_else(|| {
+            let drive = std::env::var_os("HOMEDRIVE")?;
+            let path = std::env::var_os("HOMEPATH")?;
+            Some(PathBuf::from(drive).join(path))
+        })
+        .unwrap_or_else(std::env::temp_dir)
+}
+
 /// A profile owned by Nimbus. Never point this at ~/.config/eddie: the engine
 /// rewrites its profile on shutdown, and an unreadable one is replaced with
 /// defaults.
+#[cfg(not(windows))]
 pub fn profile_dir() -> PathBuf {
     if let Some(p) = std::env::var_os("NIMBUS_PROFILE") {
         return PathBuf::from(p);
@@ -94,12 +108,50 @@ pub fn profile_dir() -> PathBuf {
     base.join("nimbus/profile")
 }
 
+#[cfg(windows)]
+pub fn profile_dir() -> PathBuf {
+    if let Some(p) = std::env::var_os("NIMBUS_PROFILE") {
+        return PathBuf::from(p);
+    }
+    let base = std::env::var_os("LOCALAPPDATA")
+        .or_else(|| std::env::var_os("APPDATA"))
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir);
+    base.join("nimbus").join("profile")
+}
+
 fn is_cli(path: &Path) -> bool {
     path.is_file()
 }
 
+/// Console helpers (Eddie's CLI, taskkill, reg) must not flash a console window
+/// when launched by the GUI app.
+#[cfg(windows)]
+pub(crate) fn hide_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+}
+
+#[cfg(not(windows))]
+pub(crate) fn hide_console(_command: &mut Command) {}
+
+/// Stop a child politely on Unix, where SIGTERM lets Eddie finish its shutdown.
+/// Windows has no equivalent for a non-console process here; `Child::kill` is
+/// the fallback after the caller has already sent the engine's `exit` command.
+fn terminate(child: &mut Child) {
+    #[cfg(unix)]
+    unsafe {
+        libc::kill(child.id() as i32, libc::SIGTERM);
+    }
+    #[cfg(windows)]
+    {
+        let _ = child.kill();
+    }
+}
+
 /// The privileged helper must share a directory with its client. When Eddie is
 /// already running, the helper's path tells us which install is live.
+#[cfg(not(windows))]
 fn service_dir() -> Option<PathBuf> {
     let entries = std::fs::read_dir("/proc").ok()?;
     for entry in entries.flatten() {
@@ -124,6 +176,14 @@ fn service_dir() -> Option<PathBuf> {
     None
 }
 
+#[cfg(windows)]
+fn service_dir() -> Option<PathBuf> {
+    windows_install_dirs()
+        .into_iter()
+        .find(|dir| is_cli(&dir.join("eddie-cli.exe")))
+}
+
+#[cfg(not(windows))]
 fn mount_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Ok(entries) = std::fs::read_dir("/tmp") else {
@@ -153,6 +213,43 @@ fn mount_candidates() -> Vec<PathBuf> {
     out
 }
 
+#[cfg(windows)]
+fn mount_candidates() -> Vec<PathBuf> {
+    Vec::new()
+}
+
+/// Windows Eddie installs to `%ProgramFiles%\AirVPN` by default, but the NSIS
+/// installer records a custom directory in this registry value.
+#[cfg(windows)]
+fn windows_install_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    let mut query = Command::new("reg.exe");
+    query.args(["query", r"HKLM\Software\AirVPN", "/ve"]);
+    hide_console(&mut query);
+    if let Ok(output) = query.output() {
+        for line in String::from_utf8_lossy(&output.stdout).lines() {
+            if let Some(index) = line.find("REG_SZ") {
+                let path = line[index + "REG_SZ".len()..].trim();
+                if !path.is_empty() {
+                    dirs.push(PathBuf::from(path));
+                }
+            }
+        }
+    }
+    for key in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(base) = std::env::var_os(key) {
+            dirs.push(PathBuf::from(base).join("AirVPN"));
+        }
+    }
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        dirs.push(PathBuf::from(local).join("Programs").join("AirVPN"));
+    }
+    dirs.sort();
+    dirs.dedup();
+    dirs
+}
+
+#[cfg(not(windows))]
 fn find_cli() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("NIMBUS_EDDIE_CLI") {
         let p = PathBuf::from(path);
@@ -191,6 +288,31 @@ fn find_cli() -> Option<PathBuf> {
         let p = dir.join("eddie-cli");
         if is_cli(&p) {
             return Some(p);
+        }
+    }
+    None
+}
+
+#[cfg(windows)]
+fn find_cli() -> Option<PathBuf> {
+    if let Some(path) = std::env::var_os("NIMBUS_EDDIE_CLI") {
+        let p = PathBuf::from(path);
+        if is_cli(&p) {
+            return Some(p);
+        }
+    }
+    for dir in windows_install_dirs() {
+        let p = dir.join("eddie-cli.exe");
+        if is_cli(&p) {
+            return Some(p);
+        }
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&path) {
+            let p = dir.join("eddie-cli.exe");
+            if is_cli(&p) {
+                return Some(p);
+            }
         }
     }
     None
@@ -363,9 +485,7 @@ fn stop_locked(slot: &mut Option<Process>) {
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
-        unsafe {
-            libc::kill(process.child.id() as i32, libc::SIGTERM);
-        }
+        terminate(&mut process.child);
         let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1200);
         while std::time::Instant::now() < deadline {
             match process.child.try_wait() {
@@ -439,6 +559,8 @@ fn disarm_inner(state: &EngineState) -> Result<AuthResult, String> {
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
+
+    hide_console(&mut command);
 
     #[cfg(target_os = "linux")]
     unsafe {
@@ -514,9 +636,7 @@ fn disarm_inner(state: &EngineState) -> Result<AuthResult, String> {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
     if child.try_wait().ok().flatten().is_none() {
-        unsafe {
-            libc::kill(child.id() as i32, libc::SIGTERM);
-        }
+        terminate(&mut child);
         std::thread::sleep(std::time::Duration::from_millis(800));
     }
     let _ = child.kill();
@@ -616,6 +736,8 @@ fn authenticate_inner(
         .stdout(Stdio::piped())
         .stderr(Stdio::null());
 
+    hide_console(&mut command);
+
     #[cfg(target_os = "linux")]
     unsafe {
         use std::os::unix::process::CommandExt;
@@ -696,9 +818,7 @@ fn authenticate_inner(
         std::thread::sleep(std::time::Duration::from_millis(1500));
     }
 
-    unsafe {
-        libc::kill(child.id() as i32, libc::SIGTERM);
-    }
+    terminate(&mut child);
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(1500);
     while std::time::Instant::now() < deadline {
         match child.try_wait() {
@@ -719,6 +839,7 @@ fn authenticate_inner(
 /// Recover from a previous crash. Eddie's single-instance lock is a pid file in
 /// the temp dir; if the pid belongs to an engine pointed at *our* profile, it is
 /// an orphan from a killed Nimbus process and can be stopped safely.
+#[cfg(not(windows))]
 fn kill_orphan(profile: &Path) {
     let marker = format!("--path={}", profile.display());
     let mut dirs = vec![std::env::temp_dir(), PathBuf::from("/tmp")];
@@ -766,6 +887,52 @@ fn kill_orphan(profile: &Path) {
             }
             let _ = std::fs::remove_file(entry.path());
         }
+    }
+}
+
+/// Windows equivalent of the orphan recovery pass. The pid file is only trusted
+/// when the live process command line points at Nimbus's own profile, so an
+/// unrelated process with a reused pid is never killed.
+#[cfg(windows)]
+fn kill_orphan(profile: &Path) {
+    let marker = format!("--path={}", profile.display());
+    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !(name.starts_with("Eddie_") && name.ends_with(".pid")) {
+            continue;
+        }
+        let Ok(contents) = std::fs::read_to_string(entry.path()) else {
+            continue;
+        };
+        let Ok(pid) = contents.trim().parse::<u32>() else {
+            let _ = std::fs::remove_file(entry.path());
+            continue;
+        };
+
+        let mut query = Command::new("powershell.exe");
+        query.args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            &format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"),
+        ]);
+        hide_console(&mut query);
+        let Ok(output) = query.output() else {
+            continue;
+        };
+        let cmdline = String::from_utf8_lossy(&output.stdout);
+        if !cmdline.contains(&marker) {
+            continue;
+        }
+
+        let mut kill = Command::new("taskkill.exe");
+        kill.args(["/PID", &pid.to_string(), "/T", "/F"]);
+        hide_console(&mut kill);
+        let _ = kill.status();
+        let _ = std::fs::remove_file(entry.path());
     }
 }
 
@@ -831,6 +998,8 @@ fn start_inner(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+
+    hide_console(&mut command);
 
     // If the UI process dies unexpectedly, take the engine with it instead of
     // leaving an orphan that holds Eddie's single-instance lock.

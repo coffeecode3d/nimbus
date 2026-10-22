@@ -161,6 +161,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const startInFlight = useRef(false);
   const disarming = useRef(false);
   const watchdog = useRef<number | null>(null);
+  const installInFlight = useRef(false);
   const abortRef = useRef<(message: string) => void>(() => undefined);
   const statusRef = useRef<ConnState>("disconnected");
   const optionsRef = useRef({ serverId, protocol, port, netlock });
@@ -669,6 +670,26 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     }, 6000);
   }, [state, send]);
 
+  const stopForUpdate = useCallback(async () => {
+    wantedConnect.current = false;
+    if (watchdog.current !== null) {
+      window.clearTimeout(watchdog.current);
+      watchdog.current = null;
+    }
+    session.current = null;
+    readyRef.current = false;
+    setState("disconnected");
+    setStatus("stopped");
+    setActualServerName(null);
+    setStats(emptyStats());
+    try {
+      await invoke("engine_stop");
+    } catch {
+      // The updater should still be allowed to proceed if the engine already
+      // exited on its own.
+    }
+  }, []);
+
   const toggle = useCallback(() => {
     if (state === "connected" || state === "connecting") void disconnect();
     else void connect();
@@ -749,7 +770,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   }, [login]);
 
   const installEngine = useCallback(async () => {
-    if (installing) return;
+    if (installInFlight.current) return;
+    installInFlight.current = true;
     setInstalling(true);
     setInstallError(null);
     setInstallStage("starting");
@@ -766,17 +788,22 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         setInstallProgress(100);
         setError(null);
       } else {
+        setInstallStage("error");
         setInstallError(
           value.error ??
             "The installer finished, but Nimbus could not find eddie-cli. Restart Nimbus and try again.",
         );
       }
     } catch (err) {
-      if (mounted.current) setInstallError(String(err));
+      if (mounted.current) {
+        setInstallStage("error");
+        setInstallError(String(err));
+      }
     } finally {
+      installInFlight.current = false;
       if (mounted.current) setInstalling(false);
     }
-  }, [installing]);
+  }, []);
 
   const refreshEngine = useCallback(async () => {
     setInstallError(null);
@@ -884,6 +911,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id])),
     connect,
     disconnect,
+    stopForUpdate,
     toggle,
     selectServer,
     connected,

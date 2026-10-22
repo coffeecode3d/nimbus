@@ -101,6 +101,11 @@ The deb remains the recommended format on Debian/Ubuntu because desktop
 integration is familiar. The AppImage is the portable option for other distros;
 both use the same external engine.
 
+The setup follows AirVPN's **stable** channel at the moment it runs. Nimbus 0.1
+does not yet update an already-installed engine automatically; if AirVPN ships a
+security update, install its official package or replace `/opt/eddie-ui` using
+the official installer. An update-check flow is on the roadmap.
+
 ## Why Eddie is not bundled
 
 `eddie-cli` is not a self-contained binary. It needs the helper, `openvpn`,
@@ -251,10 +256,12 @@ inline script, so there is no flash of the wrong theme on launch.
    state colour.
 6. ~~**Packaging** — deb/AppImage with a verified first-run engine installer
    (`/opt/eddie-ui`) and "Eddie not found" onboarding.~~
-7. **Network-lock parity** — re-enable it once connect can be proven safe:
+7. **Engine updates** — compare the installed Eddie version with AirVPN's
+   stable release, then offer a verified update that preserves the helper.
+8. **Network-lock parity** — re-enable it once connect can be proven safe:
    provider allowlist + DNS, automatic disarm on every failure path, and a
    visible "lock is armed" indicator.
-8. **Parity checks** — DNS-leak test, suspend/resume, network change, IPv6.
+9. **Parity checks** — DNS-leak test, suspend/resume, network change, IPv6.
 
 ### Windows and split tunnelling
 

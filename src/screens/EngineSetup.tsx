@@ -3,22 +3,31 @@ import type { Engine } from "../engine";
 import { Button, Spinner } from "../components";
 import { BrandMark, Check } from "../icons";
 
-const MANUAL_URL = "https://airvpn.org/linux/eddie";
-
-const STEPS = [
-  "Download the signed Linux build from eddie.website.",
-  "Check AirVPN's OpenPGP signature and the SHA-256 checksum.",
-  "Install Eddie and its privileged helper to /opt/eddie-ui.",
-];
+const MANUAL_URL_LINUX = "https://airvpn.org/linux/eddie";
+const MANUAL_URL_WINDOWS = "https://airvpn.org/windows/eddie";
 
 export function EngineSetup({ engine }: { engine: Engine }) {
+  const isWindows =
+    typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+  const manualUrl = isWindows ? MANUAL_URL_WINDOWS : MANUAL_URL_LINUX;
+  const steps = isWindows
+    ? [
+        "Download the signed Windows installer from eddie.website.",
+        "Check AirVPN's publisher signature and the SHA-256 checksum.",
+        "Install Eddie and its privileged service with one Windows prompt.",
+      ]
+    : [
+        "Download the signed Linux build from eddie.website.",
+        "Check AirVPN's OpenPGP signature and the SHA-256 checksum.",
+        "Install Eddie and its privileged helper to /opt/eddie-ui.",
+      ];
   const [copied, setCopied] = useState(false);
   const active = engine.installing || (engine.installStage !== null && engine.installStage !== "error");
   const percent = engine.installProgress;
 
   const copyManual = async () => {
     try {
-      await navigator.clipboard.writeText(MANUAL_URL);
+      await navigator.clipboard.writeText(manualUrl);
       setCopied(true);
       window.setTimeout(() => setCopied(false), 1600);
     } catch {
@@ -62,13 +71,13 @@ export function EngineSetup({ engine }: { engine: Engine }) {
           <div className="setup-main-head">
             <h2>Install the official engine</h2>
             <p>
-              One click downloads the stable Linux build, verifies it, and asks
-              for administrator approval once.
+              One click downloads the stable {isWindows ? "Windows" : "Linux"} build,
+              verifies it, and asks for administrator approval once.
             </p>
           </div>
 
           <ol className="setup-steps">
-            {STEPS.map((text, index) => (
+            {steps.map((text, index) => (
               <li key={text}>
                 <span className="setup-step-number">{index + 1}</span>
                 <span>{text}</span>
@@ -95,7 +104,9 @@ export function EngineSetup({ engine }: { engine: Engine }) {
           </Button>
 
           <p className="setup-meta">
-            Linux x86_64 · about 34 MB · requires polkit and GnuPG
+            {isWindows
+              ? "Windows x64 · about 41 MB · Windows will ask for administrator approval"
+              : "Linux x86_64 · about 34 MB · requires polkit and GnuPG"}
           </p>
 
           {active && (
@@ -139,7 +150,7 @@ export function EngineSetup({ engine }: { engine: Engine }) {
               </Button>
             </div>
             <div className="setup-manual-url">
-              <code>{MANUAL_URL}</code>
+              <code>{manualUrl}</code>
               <button type="button" className="setup-copy" onClick={() => void copyManual()}>
                 {copied ? <Check size={13} /> : "Copy"}
                 {copied ? "Copied" : null}
@@ -150,8 +161,8 @@ export function EngineSetup({ engine }: { engine: Engine }) {
       </div>
 
       <p className="setup-legal">
-        Nimbus never bundles or modifies Eddie. The installer only accepts an
-        archive signed by AirVPN's pinned release key.
+        Nimbus never bundles or modifies Eddie. The installer only accepts a
+        build signed by AirVPN and verified against the published checksum.
       </p>
     </div>
   );

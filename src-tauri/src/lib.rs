@@ -7,6 +7,8 @@ use tauri::Manager;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
   let app = tauri::Builder::default()
+    .plugin(tauri_plugin_updater::Builder::new().build())
+    .plugin(tauri_plugin_process::init())
     .manage(engine::EngineState::default())
     .invoke_handler(tauri::generate_handler![
       credentials::credentials_save,

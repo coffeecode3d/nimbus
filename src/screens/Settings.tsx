@@ -1,5 +1,6 @@
 import { useState } from "react";
 import type { Engine } from "../engine";
+import type { UpdatesApi } from "../updates";
 import { ACCENTS } from "../appearance";
 import type { Appearance } from "../appearance";
 import { Field, Section, Select, Toggle, Button, Spinner } from "../components";
@@ -8,12 +9,30 @@ import { Check } from "../icons";
 export function SettingsScreen({
   engine,
   appearance,
+  updates,
   notify,
 }: {
   engine: Engine;
   appearance: Appearance;
+  updates: UpdatesApi;
   notify: (msg: string) => void;
 }) {
+  const installUpdate = async () => {
+    if (engine.connected || engine.state === "connecting" || engine.state === "disconnecting") {
+      notify("Disconnect before installing an update");
+      return;
+    }
+    await engine.stopForUpdate();
+    await updates.install();
+  };
+  const checkedLabel = updates.lastChecked
+    ? new Date(updates.lastChecked).toLocaleString([], {
+        month: "short",
+        day: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "not yet";
   const [dnsBlock, setDnsBlock] = useState(true);
   const [blockV6, setBlockV6] = useState(true);
   const [autoConnect, setAutoConnect] = useState(false);
@@ -252,11 +271,118 @@ export function SettingsScreen({
         </Section>
 
         <Section title="About">
-          <Field title="Version" desc="Nimbus 0.1.0 · unofficial UI">
-            <button type="button" className="btn btn-quiet" onClick={() => notify("You're up to date")}>
-              Check for updates
-            </button>
+          <Field
+            title="Version"
+            desc={`Nimbus ${updates.currentVersion} · unofficial UI · last checked ${checkedLabel}`}
+          >
+            <Button
+              variant="quiet"
+              onClick={() => void updates.check(true)}
+              loading={updates.checking}
+              disabled={!updates.enabled || updates.checking || updates.installing}
+            >
+              {updates.checking ? "Checking…" : "Check for updates"}
+            </Button>
           </Field>
+          <Field
+            title="Automatic checks"
+            desc="Look for a signed Nimbus release every six hours. Nothing is downloaded or installed until you approve it."
+          >
+            <Toggle
+              label="Automatic update checks"
+              checked={updates.autoCheck}
+              onChange={updates.setAutoCheck}
+              disabled={!updates.enabled || updates.installing}
+            />
+          </Field>
+
+          {updates.info && (
+            <div className="update-panel">
+              <div className="update-copy">
+                <div className="update-title">
+                  Nimbus {updates.info.version} is available
+                  <span className="badge">signed</span>
+                </div>
+                <p className="update-desc">
+                  {!updates.supported
+                    ? "This .deb build is updated through your package manager. Download the latest .deb or AppImage from GitHub Releases."
+                    : engine.connected || engine.state === "connecting"
+                      ? "Disconnect the tunnel before installing. Nimbus will replace this build and restart."
+                      : "Nimbus will download the update, verify its signature, replace this build, and restart."}
+                </p>
+                {updates.info.body && <p className="update-notes">{updates.info.body}</p>}
+                {updates.installing && (
+                  <div className="update-progress-wrap">
+                    <div
+                      className="update-progress"
+                      role="progressbar"
+                      aria-valuenow={updates.progress ?? undefined}
+                      aria-valuemin={0}
+                      aria-valuemax={100}
+                    >
+                      <span style={{ width: `${updates.progress ?? 6}%` }} />
+                    </div>
+                    <span className="update-progress-label">
+                      {updates.progress === null ? "Downloading…" : `${updates.progress}%`}
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="update-actions">
+                {updates.supported ? (
+                  <Button
+                    variant="primary"
+                    onClick={() => void installUpdate()}
+                    loading={updates.installing}
+                    disabled={
+                      updates.installing ||
+                      engine.connected ||
+                      engine.state === "connecting" ||
+                      engine.state === "disconnecting"
+                    }
+                  >
+                    {updates.installing ? "Updating…" : "Update & restart"}
+                  </Button>
+                ) : (
+                  <button
+                    type="button"
+                    className="btn btn-quiet"
+                    onClick={() =>
+                      notify("Download the latest build from github.com/coffeecode3d/nimbus/releases")
+                    }
+                  >
+                    Where to download
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {updates.error && (
+            <div className="update-panel is-error">
+              <div className="update-copy">
+                <div className="update-title">Update check failed</div>
+                <p className="update-desc">{updates.error}</p>
+              </div>
+              <div className="update-actions">
+                <button type="button" className="btn btn-quiet" onClick={updates.clearError}>
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          )}
+
+          {!updates.info && !updates.error && updates.upToDate && (
+            <div className="update-panel is-current">
+              <div className="update-copy">
+                <div className="update-title">Nimbus is up to date</div>
+                <p className="update-desc">
+                  You are running the newest published version. Nimbus checks again automatically.
+                </p>
+              </div>
+            </div>
+          )}
+
           <Field title="Engine" desc="Official Eddie CLI, driven over jsoninout.">
             <span className="engine-path mono">{engine.info?.cli ?? "Preview (simulated engine)"}</span>
           </Field>

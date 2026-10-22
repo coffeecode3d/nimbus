@@ -69,6 +69,7 @@ impl Drop for TempDir {
     }
 }
 
+#[cfg(not(windows))]
 fn cache_root() -> PathBuf {
     if let Some(value) = std::env::var_os("XDG_CACHE_HOME") {
         if !value.is_empty() {
@@ -79,6 +80,15 @@ fn cache_root() -> PathBuf {
         return PathBuf::from(home).join(".cache");
     }
     std::env::temp_dir()
+}
+
+#[cfg(windows)]
+fn cache_root() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
+        .join("nimbus")
+        .join("cache")
 }
 
 #[cfg(unix)]
@@ -326,6 +336,10 @@ fn install_inner(app: &AppHandle) -> Result<EngineInfo, String> {
         return Ok(existing);
     }
 
+    if cfg!(windows) {
+        return install_windows(app);
+    }
+
     if !cfg!(target_os = "linux") {
         return Err(
             "Automatic engine setup is currently available on Linux. Install the official Eddie client for your platform, then check again."
@@ -505,6 +519,136 @@ done
         );
     }
     Ok(installed)
+}
+
+/// Windows ships no GnuPG, so the detached OpenPGP signature used on Linux is
+/// replaced by the installer's Authenticode signature. Windows validates the
+/// certificate chain and timestamp; we additionally pin AirVPN's legal signer
+/// name so an unrelated valid certificate cannot be substituted.
+#[cfg(windows)]
+fn verify_windows_authenticode(path: &Path) -> Result<(), String> {
+    let quoted = path.display().to_string().replace('\'', "''");
+    let script = format!(
+        "$ErrorActionPreference = 'Stop'; \
+         $s = Get-AuthenticodeSignature -LiteralPath '{quoted}'; \
+         if ($s.Status -ne 'Valid') {{ Write-Error ('Authenticode status: ' + $s.Status); exit 2 }}; \
+         $subject = $s.SignerCertificate.Subject; \
+         if ($subject -notlike '*O=AIRVPN DI PAOLO BRINI*') {{ Write-Error ('Unexpected signer: ' + $subject); exit 3 }}; \
+         Write-Output $subject"
+    );
+
+    let mut command = Command::new("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        &script,
+    ]);
+    engine::hide_console(&mut command);
+    let output = command.output().map_err(|e| {
+        format!("Windows' signature checker could not be started: {e}")
+    })?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(format!(
+            "The Windows installer did not pass AirVPN's signed-publisher check: {}",
+            if detail.is_empty() {
+                output.status.to_string()
+            } else {
+                detail
+            }
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn install_windows(app: &AppHandle) -> Result<EngineInfo, String> {
+    if std::env::consts::ARCH != "x86_64" {
+        return Err(
+            "Automatic setup currently supports x86_64 Windows. Install the official Eddie package for your architecture, then check again."
+                .into(),
+        );
+    }
+
+    emit(app, "download", "Contacting AirVPN…", Some(0));
+    let client = client()?;
+
+    let download_url = "https://eddie.website/download/?platform=windows&arch=x64&ui=ui&format=installer.exe&version=stable";
+    let installer_info: DownloadInfo = get_json(&client, download_url)?;
+    ensure_official(&installer_info.url)?;
+    if !installer_info.filename.ends_with(".exe") {
+        return Err("AirVPN returned an unexpected Windows installer format.".into());
+    }
+
+    let checksum_url = "https://eddie.website/api/download/?platform=windows&arch=x64&ui=ui&format=installer.exe&version=stable&checksum=sha256";
+    let checksum: ChecksumInfo = get_json(&client, checksum_url)?;
+    if checksum.checksum.len() != 64 {
+        return Err("AirVPN returned an invalid SHA-256 checksum.".into());
+    }
+
+    let work = cache_root().join(format!("nimbus/install-{}", std::process::id()));
+    private_dir(&work)?;
+    let work = fs::canonicalize(&work)
+        .map_err(|e| format!("Could not resolve the install directory: {e}"))?;
+    let _temporary = TempDir(work.clone());
+    let installer = work.join("eddie-setup.exe");
+
+    emit(
+        app,
+        "download",
+        format!("Downloading {} from eddie.website…", installer_info.filename),
+        Some(0),
+    );
+    download(app, &client, &installer_info.url, &installer, true)?;
+
+    emit(app, "verify", "Checking SHA-256 checksum…", None);
+    let digest = sha256(&installer)?;
+    if !digest.eq_ignore_ascii_case(&checksum.checksum) {
+        return Err("The engine download failed its SHA-256 checksum check.".into());
+    }
+
+    emit(app, "verify", "Verifying AirVPN's Windows signature…", None);
+    verify_windows_authenticode(&installer)?;
+
+    emit(
+        app,
+        "install",
+        "Installing Eddie and its privileged service. Approve the Windows prompt…",
+        None,
+    );
+    let status = Command::new(&installer)
+        .arg("/S")
+        .status()
+        .map_err(|e| format!("Could not start the official Eddie installer: {e}"))?;
+    if !status.success() {
+        if status.code() == Some(1223) {
+            return Err("Administrator approval was cancelled. Eddie was not installed.".into());
+        }
+        return Err(format!(
+            "The official Eddie installer exited with status {status}. Eddie was not installed."
+        ));
+    }
+
+    // The NSIS installer runs the privileged helper registration near the end.
+    // Give the service a moment to appear before discovery reports failure.
+    for _ in 0..40 {
+        let installed = engine::locate();
+        if installed.found {
+            emit(app, "done", "The engine is ready.", Some(100));
+            return Ok(installed);
+        }
+        std::thread::sleep(Duration::from_millis(500));
+    }
+
+    Err("Eddie was installed, but Nimbus could not find Eddie-CLI.exe. Restart Nimbus, then check again.".into())
+}
+
+#[cfg(not(windows))]
+fn install_windows(_app: &AppHandle) -> Result<EngineInfo, String> {
+    Err("Automatic engine setup is not available on this platform.".into())
 }
 
 #[tauri::command]

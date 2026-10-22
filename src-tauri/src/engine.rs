@@ -82,18 +82,6 @@ fn home_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("/"))
 }
 
-#[cfg(windows)]
-fn home_dir() -> PathBuf {
-    std::env::var_os("USERPROFILE")
-        .map(PathBuf::from)
-        .or_else(|| {
-            let drive = std::env::var_os("HOMEDRIVE")?;
-            let path = std::env::var_os("HOMEPATH")?;
-            Some(PathBuf::from(drive).join(path))
-        })
-        .unwrap_or_else(std::env::temp_dir)
-}
-
 /// A profile owned by Nimbus. Never point this at ~/.config/eddie: the engine
 /// rewrites its profile on shutdown, and an unreadable one is replaced with
 /// defaults.
@@ -176,13 +164,6 @@ fn service_dir() -> Option<PathBuf> {
     None
 }
 
-#[cfg(windows)]
-fn service_dir() -> Option<PathBuf> {
-    windows_install_dirs()
-        .into_iter()
-        .find(|dir| is_cli(&dir.join("eddie-cli.exe")))
-}
-
 #[cfg(not(windows))]
 fn mount_candidates() -> Vec<PathBuf> {
     let mut out = Vec::new();
@@ -211,11 +192,6 @@ fn mount_candidates() -> Vec<PathBuf> {
         }
     }
     out
-}
-
-#[cfg(windows)]
-fn mount_candidates() -> Vec<PathBuf> {
-    Vec::new()
 }
 
 /// Windows Eddie installs to `%ProgramFiles%\AirVPN` by default, but the NSIS

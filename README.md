@@ -79,6 +79,17 @@ src-tauri/target/release/bundle/deb/Nimbus_0.1.0_amd64.deb
 src-tauri/target/release/bundle/appimage/Nimbus_0.1.0_amd64.AppImage
 ```
 
+On Windows:
+
+```powershell
+pnpm install
+pnpm exec tauri build --bundles nsis
+```
+
+Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.0_x64-setup.exe`.
+CI builds both platforms with `.github/workflows/build.yml` (artifacts) and
+publishes signed releases from `v*` tags with `.github/workflows/release.yml`.
+
 Install the deb with `sudo apt install ./Nimbus_0.1.0_amd64.deb`, or mark the
 AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
 Neither package bundles Eddie. On first launch, if `eddie-cli` is missing,
@@ -91,7 +102,7 @@ Nimbus shows a **one-time engine setup** screen:
 4. extracts the AppImage and installs Eddie plus its privileged helper to
    `/opt/eddie-ui`, with one `pkexec` administrator prompt.
 
-Automatic setup currently targets **x86_64 Linux** and needs `pkexec` (polkit),
+Automatic setup targets **x86_64 Linux**. It needs `pkexec` (polkit),
 `gpg`/`gpgv`, `tar`, and a running polkit agent. Desktop Debian/Ubuntu, Fedora,
 Arch and openSUSE installations normally have these. If the helper service has
 already been installed elsewhere, choose **Check again** after installing Eddie
@@ -101,10 +112,45 @@ The deb remains the recommended format on Debian/Ubuntu because desktop
 integration is familiar. The AppImage is the portable option for other distros;
 both use the same external engine.
 
-The setup follows AirVPN's **stable** channel at the moment it runs. Nimbus 0.1
-does not yet update an already-installed engine automatically; if AirVPN ships a
-security update, install its official package or replace `/opt/eddie-ui` using
-the official installer. An update-check flow is on the roadmap.
+### Windows
+
+The Windows build is an NSIS installer. It uses WebView2, stores the password in
+Windows Credential Manager, and drives the official `Eddie-CLI.exe` from
+`%ProgramFiles%\AirVPN`. First-run setup downloads AirVPN's official Windows
+installer, checks its SHA-256 checksum, verifies the Authenticode publisher
+signature (Windows has no bundled GnuPG), and runs the installer silently under
+one UAC prompt. The installer registers Eddie's privileged service.
+
+The Windows build is produced in CI and is experimental until the live tunnel
+path has been tested on a Windows host. It is unsigned for now, so SmartScreen
+may show a warning.
+
+## Updates
+
+Nimbus updates itself, not Eddie. The **Settings → About** button performs a
+real signed update check, and the app checks automatically about every six hours
+(opt-out in Settings). When a release is available, Settings shows the version
+and release notes plus **Update & restart**. Updates are downloaded, checked
+against the Tauri minisign public key in `src-tauri/tauri.conf.json`, installed,
+and the app relaunches. Nimbus stops its Eddie engine before replacing itself,
+and refuses to install while a tunnel is connected or connecting.
+
+Formats that can replace themselves in place:
+
+- **AppImage** on Linux.
+- **NSIS / MSI** on Windows.
+
+A `.deb` installation is owned by apt; its UI reports that the package manager
+should be used instead. Every release published by
+`.github/workflows/release.yml` includes `latest.json` and `.sig` updater
+artifacts. The endpoint is the repository's public **latest** GitHub release, so
+the repository (or a mirror hosting the manifest) must stay public for checks to
+work.
+
+Eddie itself is still updated separately. Nimbus does not replace
+`/opt/eddie-ui` or the Windows Eddie install; use AirVPN's official installer
+for engine security updates. The first-run setup always follows AirVPN's
+**stable** channel at the moment it runs.
 
 ## Why Eddie is not bundled
 
@@ -125,11 +171,14 @@ vendoring a copy; the local installation is the only Eddie copy on the machine.
 
 ## Live engine
 
-Nimbus looks for `eddie-cli` in this order: `NIMBUS_EDDIE_CLI`, the directory of
-a running `eddie-cli-elevated` helper, standard `/opt/eddie-ui` installs, a
-stable extraction at `~/.local/opt/eddie/squashfs-root/opt/eddie-ui`, then
-AppImage mounts. The engine is always spawned **from its install directory** so
-Eddie's integrity check accepts it.
+On Linux, Nimbus looks for `eddie-cli` in this order: `NIMBUS_EDDIE_CLI`, the
+directory of a running `eddie-cli-elevated` helper, standard `/opt/eddie-ui`
+installs, a stable extraction at
+`~/.local/opt/eddie/squashfs-root/opt/eddie-ui`, then AppImage mounts. On
+Windows it checks `NIMBUS_EDDIE_CLI`, the install directory recorded by Eddie's
+installer under `HKLM\Software\AirVPN`, `%ProgramFiles%\AirVPN`, and `PATH`. The
+engine is always spawned **from its install directory** so Eddie's integrity
+check accepts it.
 
 The privileged helper is still Eddie's own service. The onboarding installs and
 registers it from the same stable directory. To refresh it manually after a
@@ -140,7 +189,8 @@ sudo /opt/eddie-ui/eddie-cli-elevated service=install service_port=9350
 ```
 
 Nimbus keeps its own profile at `${XDG_DATA_HOME:-~/.local/share}/nimbus/profile`
-(override with `NIMBUS_PROFILE`). It never reads or writes `~/.config/eddie`.
+on Linux and `%LOCALAPPDATA%\nimbus\profile` on Windows (override with
+`NIMBUS_PROFILE`). It never reads or writes Eddie's own profile.
 
 ### Sign-in and credentials
 
@@ -161,8 +211,8 @@ Every engine start is deliberately **idle** (`--connect=false`). Once the
 engine reports ready, Nimbus hands it the login and password over stdin
 (`options.set`) and only then sends `mainaction.connect`. The password never
 appears in the engine's command line, where another local user could read it
-from `/proc`, and JSON option-change events are redacted before they reach the
-webview or a trace log.
+from `/proc` (or `Win32_Process`), and JSON option-change events are redacted
+before they reach the webview or a trace log.
 
 Eddie may cache the password inside its own encrypted profile while a session
 is active. Nimbus asks Eddie to clear it before every clean shutdown; a hard
@@ -256,26 +306,28 @@ inline script, so there is no flash of the wrong theme on launch.
    state colour.
 6. ~~**Packaging** — deb/AppImage with a verified first-run engine installer
    (`/opt/eddie-ui`) and "Eddie not found" onboarding.~~
-7. **Engine updates** — compare the installed Eddie version with AirVPN's
+7. ~~**Nimbus updates** — signed self-updates with automatic checks, download
+   progress, install and relaunch.~~
+8. **Engine updates** — compare the installed Eddie version with AirVPN's
    stable release, then offer a verified update that preserves the helper.
-8. **Network-lock parity** — re-enable it once connect can be proven safe:
-   provider allowlist + DNS, automatic disarm on every failure path, and a
-   visible "lock is armed" indicator.
-9. **Parity checks** — DNS-leak test, suspend/resume, network change, IPv6.
+9. **Windows hardening** — test live connect/disconnect on a Windows host,
+   add code signing, and verify the silent Eddie installer against future
+   releases.
+10. **Network-lock parity** — re-enable it once connect can be proven safe:
+    provider allowlist + DNS, automatic disarm on every failure path, and a
+    visible "lock is armed" indicator.
+11. **Parity checks** — DNS-leak test, suspend/resume, network change, IPv6.
 
 ### Windows and split tunnelling
 
-**Windows is feasible.** Eddie already ships `eddie-cli.exe` and an elevated
-Windows service, and it speaks the same `--jsoninout` protocol. The React UI and
-the keyring layer are cross-platform; Tauri uses WebView2 on Windows. The work
-is in `src-tauri/src/engine.rs`, which currently uses Linux-only process
-primitives (`prctl`/`PDEATHSIG`, `SIGTERM`, `/proc` orphan scans), plus CLI
-discovery, installer/packaging and code signing. Expect an MVP port rather than
-a one-line build; a Windows VM is required for testing. The Tauri installer will
-add Nimbus to the Start menu and Apps list; first-run setup can download and run
-AirVPN's official Windows installer under UAC instead of the Linux `pkexec`
-path. The netlock-off policy carries over and removes the riskiest
-platform-specific piece for now.
+The Windows MVP is implemented and builds in CI. Eddie ships `Eddie-CLI.exe`
+and an elevated Windows service, and speaks the same `--jsoninout` protocol.
+The port adds Windows CLI discovery (registry, `%ProgramFiles%\AirVPN`, `PATH`),
+native process termination and orphan recovery, a silent first-run installer
+with Authenticode verification, and `CREATE_NO_WINDOW` for console helpers.
+WebView2 and Credential Manager replace WebKitGTK and Secret Service; the
+netlock-off policy carries over. The remaining work is live testing on a Windows
+host and code signing the Nimbus installer.
 
 **Split tunnelling:** Eddie's core has no application/process-based split
 tunnel, and no `split tunnel` code exists in `Lib.Core`. It does support

@@ -1,0 +1,53 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Nimbus",
+  "version": "0.1.0",
+  "identifier": "app.nimbus.client",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5183",
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Nimbus",
+        "width": 1180,
+        "height": 780,
+        "minWidth": 900,
+        "minHeight": 620,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false,
+        "theme": "Dark",
+        "backgroundColor": "#08090b"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: http://ipc.localhost; object-src 'none'; base-uri 'none'; frame-ancestors 'none'",
+      "devCsp": "default-src 'self' http://localhost:5183; script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:5183; style-src 'self' 'unsafe-inline' http://localhost:5183; img-src 'self' data:; font-src 'self' data: http://localhost:5183; connect-src 'self' ipc: http://ipc.localhost ws://localhost:5183 http://localhost:5183; object-src 'none'; base-uri 'none'; frame-ancestors 'none'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": [
+      "deb",
+      "appimage"
+    ],
+    "category": "Utility",
+    "shortDescription": "A clean client for AirVPN",
+    "longDescription": "Nimbus is an unofficial, Wayland-friendly desktop client for AirVPN. It drives the official Eddie engine without modifying it.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "publisher": "Nimbus contributors",
+    "copyright": "Copyright \u00a9 2026 Nimbus contributors",
+    "licenseFile": "../LICENSE",
+    "homepage": "https://github.com/coffeecode3d/nimbus"
+  }
+}

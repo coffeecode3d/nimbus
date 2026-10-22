@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="dark" />
+    <title>Nimbus — AirVPN</title>
+    <script>
+      (function () {
+        try {
+          var q = new URLSearchParams(window.location.search);
+          var stored = function (key, fallback) {
+            try {
+              return JSON.parse(localStorage.getItem(key)) || fallback;
+            } catch (e) {
+              return fallback;
+            }
+          };
+          var theme = q.get("theme") || stored("nimbus.theme", "dark");
+          var accent = q.get("accent") || stored("nimbus.accent", "#5b9dff");
+          document.documentElement.dataset.theme = theme;
+          document.documentElement.style.colorScheme = theme;
+          document.documentElement.style.setProperty("--accent", accent);
+        } catch (e) {}
+      })();
+    </script>
+    <style>
+      /* Pre-CSS paint: avoid a white flash before the bundle loads. The real
+         palette lives in src/styles.css and is driven by --bg / --text. */
+      html,
+      body {
+        margin: 0;
+      }
+      html {
+        background: #08090b;
+        color: #e9ecf2;
+      }
+      html[data-theme="light"] {
+        background: #f5f6f9;
+        color: #161a22;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

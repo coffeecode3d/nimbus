@@ -866,50 +866,29 @@ fn kill_orphan(profile: &Path) {
     }
 }
 
-/// Windows equivalent of the orphan recovery pass. The pid file is only trusted
-/// when the live process command line points at Nimbus's own profile, so an
-/// unrelated process with a reused pid is never killed.
+/// Windows orphan recovery. Eddie does not use the Linux pid-file convention,
+/// so ask WMI for `eddie-cli.exe` processes and only stop one whose command line
+/// names Nimbus's own profile. An unrelated Eddie install is never touched.
 #[cfg(windows)]
 fn kill_orphan(profile: &Path) {
-    let marker = format!("--path={}", profile.display());
-    let Ok(entries) = std::fs::read_dir(std::env::temp_dir()) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        if !(name.starts_with("Eddie_") && name.ends_with(".pid")) {
-            continue;
-        }
-        let Ok(contents) = std::fs::read_to_string(entry.path()) else {
-            continue;
-        };
-        let Ok(pid) = contents.trim().parse::<u32>() else {
-            let _ = std::fs::remove_file(entry.path());
-            continue;
-        };
-
-        let mut query = Command::new("powershell.exe");
-        query.args([
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            &format!("(Get-CimInstance Win32_Process -Filter 'ProcessId={pid}').CommandLine"),
-        ]);
-        hide_console(&mut query);
-        let Ok(output) = query.output() else {
-            continue;
-        };
-        let cmdline = String::from_utf8_lossy(&output.stdout);
-        if !cmdline.contains(&marker) {
-            continue;
-        }
-
-        let mut kill = Command::new("taskkill.exe");
-        kill.args(["/PID", &pid.to_string(), "/T", "/F"]);
-        hide_console(&mut kill);
-        let _ = kill.status();
-        let _ = std::fs::remove_file(entry.path());
-    }
+    let marker = format!("--path={}", profile.display()).replace('\'', "''");
+    let script = format!(
+        "$ErrorActionPreference = 'SilentlyContinue'; \
+         Get-CimInstance Win32_Process -Filter \"Name='eddie-cli.exe'\" | \
+         Where-Object {{ $_.CommandLine -and $_.CommandLine.Contains('{marker}') }} | \
+         ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
+    );
+    let mut command = Command::new("powershell.exe");
+    command.args([
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        &script,
+    ]);
+    hide_console(&mut command);
+    let _ = command.status();
 }
 
 #[tauri::command]

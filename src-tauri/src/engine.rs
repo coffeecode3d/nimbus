@@ -123,6 +123,32 @@ pub(crate) fn hide_console(command: &mut Command) {
 #[cfg(not(windows))]
 pub(crate) fn hide_console(_command: &mut Command) {}
 
+/// Nimbus can itself run from an AppImage. Its wrapper prepends the mount to
+/// `LD_LIBRARY_PATH` so Nimbus finds its own WebKit/GTK libraries. Eddie is a
+/// separate .NET application with its own native library; inheriting that
+/// path makes the loader pick up Nimbus's libraries instead, and Eddie aborts
+/// with "Unable to initialize native library. Maybe a CPU architecture issue."
+/// Start the engine with a clean loader environment.
+#[cfg(target_os = "linux")]
+fn sanitize_engine_env(command: &mut Command) {
+    if std::env::var_os("APPIMAGE").is_none() {
+        return;
+    }
+    for key in [
+        "LD_LIBRARY_PATH",
+        "LD_PRELOAD",
+        "APPDIR",
+        "APPIMAGE",
+        "ARGV0",
+        "OWD",
+    ] {
+        command.env_remove(key);
+    }
+}
+
+#[cfg(not(target_os = "linux"))]
+fn sanitize_engine_env(_command: &mut Command) {}
+
 /// Stop a child politely on Unix, where SIGTERM lets Eddie finish its shutdown.
 /// Windows has no equivalent for a non-console process here; `Child::kill` is
 /// the fallback after the caller has already sent the engine's `exit` command.
@@ -433,30 +459,47 @@ fn redact_json_password(line: &str) -> String {
 const CLEAR_PASSWORD: &[u8] =
     b"{\"command\":\"options.set\",\"name\":\"password\",\"value\":\"\"}\n";
 
+/// Eddie's `--path` points at a directory, but the actual profile is
+/// `default.profile` inside it. Watching only the directory misses in-place
+/// rewrites of that file (and is why a slow Windows shutdown could be killed
+/// halfway through a save). Prefer the profile file; fall back to the
+/// directory while the first save is creating it.
+fn profile_mtime(profile: &Path) -> Option<std::time::SystemTime> {
+    let file = profile.join("default.profile");
+    if let Ok(modified) = std::fs::metadata(&file).and_then(|meta| meta.modified()) {
+        return Some(modified);
+    }
+    std::fs::metadata(profile)
+        .and_then(|meta| meta.modified())
+        .ok()
+}
+
+fn profile_written_since(profile: &Path, before: Option<std::time::SystemTime>) -> bool {
+    match (before, profile_mtime(profile)) {
+        (Some(old), Some(new)) => new > old,
+        (None, Some(_)) => true,
+        _ => false,
+    }
+}
+
 fn stop_locked(slot: &mut Option<Process>) {
     if let Some(mut process) = slot.take() {
         // `exit` is the command that runs Eddie's shutdown path: it writes the
         // encrypted profile (including the provider cache) and broadcasts
         // engine.shutdown. The CLI process then keeps waiting on stdin, so
         // watch for the profile to be written, then terminate.
-        let before = std::fs::metadata(&process.profile)
-            .and_then(|meta| meta.modified())
-            .ok();
+        let before = profile_mtime(&process.profile);
         if let Some(mut stdin) = process.stdin.take() {
             let _ = stdin.write_all(CLEAR_PASSWORD);
             let _ = stdin.write_all(b"{\"command\":\"exit\"}\n");
             let _ = stdin.flush();
         }
-        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(4500);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(6000);
         while std::time::Instant::now() < deadline {
             if let Ok(Some(_)) = process.child.try_wait() {
                 return;
             }
-            let saved = std::fs::metadata(&process.profile)
-                .and_then(|meta| meta.modified())
-                .map(|modified| before.map_or(true, |old| modified > old))
-                .unwrap_or(false);
-            if saved {
+            if profile_written_since(&process.profile, before) {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
@@ -537,6 +580,7 @@ fn disarm_inner(state: &EngineState) -> Result<AuthResult, String> {
         .stderr(Stdio::null());
 
     hide_console(&mut command);
+    sanitize_engine_env(&mut command);
 
     #[cfg(target_os = "linux")]
     unsafe {
@@ -704,6 +748,8 @@ fn authenticate_inner(
         flag("password", &password),
     ];
 
+    let before = profile_mtime(&profile);
+
     let mut command = Command::new(&info.cli);
     command
         .current_dir(&info.app_dir)
@@ -713,6 +759,7 @@ fn authenticate_inner(
         .stderr(Stdio::null());
 
     hide_console(&mut command);
+    sanitize_engine_env(&mut command);
 
     #[cfg(target_os = "linux")]
     unsafe {
@@ -788,10 +835,18 @@ fn authenticate_inner(
         }
     }
 
-    // On success Eddie writes the profile after logging "Logged in."; give it a
-    // moment to finish encrypting and saving before terminating the process.
+    // On success Eddie writes the profile after logging "Logged in."; wait for
+    // that write instead of guessing with a fixed sleep. Windows can take
+    // longer than the old 1.5 s, and killing it mid-save leaves an incomplete
+    // profile behind.
     if result.as_ref().is_some_and(|r| r.ok) {
-        std::thread::sleep(std::time::Duration::from_millis(1500));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_millis(6000);
+        while std::time::Instant::now() < deadline {
+            if profile_written_since(&profile, before) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 
     terminate(&mut child);
@@ -955,6 +1010,7 @@ fn start_inner(
         .stderr(Stdio::piped());
 
     hide_console(&mut command);
+    sanitize_engine_env(&mut command);
 
     // If the UI process dies unexpectedly, take the engine with it instead of
     // leaving an orphan that holds Eddie's single-instance lock.

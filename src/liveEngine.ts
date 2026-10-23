@@ -48,6 +48,20 @@ interface InstallEvent {
 
 /* ------------------------------------------------------------------ parsing */
 
+/**
+ * Eddie reads stdin with the console's code page on Windows, which is not
+ * necessarily UTF-8. Escape non-ASCII code units as JSON `\uXXXX` sequences so
+ * a password containing accents, symbols, or emoji reaches the engine exactly
+ * as typed. JSON decodes the escapes back to the original text.
+ */
+export function encodeEngineCommand(payload: object): string {
+  const json = JSON.stringify(payload);
+  if (json === undefined) throw new Error("Engine command is not serializable.");
+  return json.replace(/[\u007f-\uffff]/g, (char) => {
+    return `\\u${char.charCodeAt(0).toString(16).padStart(4, "0")}`;
+  });
+}
+
 export function parseRate(text: string | undefined): number {
   if (!text) return 0;
   const match = text.match(/([\d.]+)\s*([KMGTP]?)(i?)(B|bit)\s*\/?\s*s/i);
@@ -173,6 +187,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const pollTimer = useRef<number | null>(null);
   const mounted = useRef(true);
   const restoredCredentials = useRef(false);
+  // Bumped whenever the user edits credentials or signs in. A slow keyring
+  // read must not overwrite a newer password with the previously saved one.
+  const credentialsVersion = useRef(0);
 
   // Restore the saved account password from the OS keyring once per launch.
   // Eddie needs it for `act=connect`; keeping it out of the profile and out of
@@ -182,12 +199,18 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     restoredCredentials.current = true;
     const account = (localStorage.getItem("nimbus.login") ?? "").trim();
     if (!account) return;
+    const version = credentialsVersion.current;
     // Do not cancel this on StrictMode's simulated unmount. The first effect
     // invocation starts the read and the second returns early because of
     // `restoredCredentials`, so a cancellation flag would discard the result.
     void invoke<string | null>("credentials_load", { login: account })
       .then((stored) => {
         if (!mounted.current || !stored) return;
+        // The user may have typed a new password while the credential store was
+        // opening (Windows Credential Manager can be slow). Editing increments
+        // the version and clears credentialsRef, so never let an older restore
+        // race win and put a stale password back into the connect path.
+        if (credentialsVersion.current !== version || credentialsRef.current) return;
         credentialsRef.current = { login: account, password: stored };
         setSignedIn(true);
       })
@@ -216,6 +239,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     setLoginState(value);
     // Editing the account details means both the saved session and the
     // credentials held for this session may no longer match.
+    credentialsVersion.current += 1;
     credentialsRef.current = null;
     setSignedIn(false);
     if (value) localStorage.setItem("nimbus.login", value);
@@ -224,13 +248,14 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
 
   const setPassword = useCallback((value: string) => {
     setPasswordState(value);
+    credentialsVersion.current += 1;
     credentialsRef.current = null;
     setSignedIn(false);
   }, []);
 
   const send = useCallback(async (payload: object) => {
     try {
-      await invoke("engine_send", { line: JSON.stringify(payload) });
+      await invoke("engine_send", { line: encodeEngineCommand(payload) });
       return true;
     } catch {
       return false;
@@ -716,6 +741,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       setError("Enter both your AirVPN login and password.");
       return;
     }
+    // This explicit sign-in is authoritative over any keyring read still in
+    // flight; otherwise the restore could overwrite the just-verified password.
+    credentialsVersion.current += 1;
     setSigningIn(true);
     setError(null);
     try {
@@ -758,6 +786,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
 
   const forgetSignIn = useCallback(async () => {
     const account = credentialsRef.current?.login || login.trim();
+    credentialsVersion.current += 1;
     credentialsRef.current = null;
     setSignedIn(false);
     setPasswordState("");

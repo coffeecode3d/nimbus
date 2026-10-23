@@ -75,8 +75,8 @@ pnpm tauri build --bundles deb,appimage
 Outputs:
 
 ```
-src-tauri/target/release/bundle/deb/Nimbus_0.1.3_amd64.deb
-src-tauri/target/release/bundle/appimage/Nimbus_0.1.3_amd64.AppImage
+src-tauri/target/release/bundle/deb/Nimbus_0.1.4_amd64.deb
+src-tauri/target/release/bundle/appimage/Nimbus_0.1.4_amd64.AppImage
 ```
 
 On Windows:
@@ -86,11 +86,11 @@ pnpm install
 pnpm exec tauri build --bundles nsis
 ```
 
-Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.3_x64-setup.exe`.
+Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.4_x64-setup.exe`.
 CI builds both platforms with `.github/workflows/build.yml` (artifacts) and
 publishes signed releases from `v*` tags with `.github/workflows/release.yml`.
 
-Install the deb with `sudo apt install ./Nimbus_0.1.3_amd64.deb`, or mark the
+Install the deb with `sudo apt install ./Nimbus_0.1.4_amd64.deb`, or mark the
 AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
 Neither package bundles Eddie. On first launch, if `eddie-cli` is missing,
 Nimbus shows a **one-time engine setup** screen:
@@ -196,9 +196,9 @@ on Linux and `%LOCALAPPDATA%\nimbus\profile` on Windows (override with
 
 Eddie's `--jsoninout` API has no login command: only the console client runs
 `Auth()` and writes the authenticated `<user>` node. Nimbus therefore performs
-one short console-mode login against its own profile. That is the only step
-that uses Eddie's CLI `--password` option; it is short-lived and its output is
-not logged.
+one short console-mode login against its own profile. That login uses Eddie's
+CLI `--password` option and is short-lived; its output is redacted before it
+reaches the UI or a trace log.
 
 On a successful sign-in the password is saved in the **operating system's
 credential store** (Secret Service / GNOME Keyring on Linux, Credential Manager
@@ -208,18 +208,20 @@ restarts start signed in and connect without asking again.
 keeping the account name.
 
 Every engine start is deliberately **idle** (`--connect=false`). Once the
-engine reports ready, Nimbus hands it the login and password over stdin
-(`options.set`) and only then sends `mainaction.connect`. The password never
-appears in the engine's command line, where another local user could read it
-from `/proc` (or `Win32_Process`), and JSON option-change events are redacted
-before they reach the webview or a trace log.
+engine reports ready, Nimbus sends `mainaction.connect`. Eddie's JSON
+`options.set` path silently ignores password-type options, so the connecting
+engine receives the login and password on its **command line**. That means the
+password is visible to other processes running as the same local user while a
+session is active (for example via `/proc` or `Win32_Process`). Nimbus redacts
+the command line and JSON option-change events before they reach the webview or
+a trace log, and idle engines never receive credentials.
 
-Eddie may cache the password inside its own encrypted profile while a session
-is active. Nimbus asks Eddie to clear it before every clean shutdown; a hard
-crash can leave an encrypted copy until the next clean stop. The authoritative
-copy always remains the system keyring. If the keyring is unavailable, sign-in
-still works for the current session and Nimbus shows a non-blocking warning
-that the password could not be saved.
+Eddie's profile is encrypted by Eddie's own credential store. Nimbus asks Eddie
+to clear the password before a clean shutdown, but a hard crash can leave an
+encrypted copy until the next clean stop. The authoritative copy always remains
+Nimbus's system-keyring entry. If the keyring is unavailable, sign-in still
+works for the current session and Nimbus shows a non-blocking warning that the
+password could not be saved.
 
 ### Network lock is deliberately disabled in this build
 

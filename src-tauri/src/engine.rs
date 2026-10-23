@@ -47,6 +47,13 @@ pub struct StartOptions {
     pub mode: Option<String>,
     pub port: Option<u16>,
     pub netlock: Option<bool>,
+    /// Account credentials for the session authorization. Eddie's jsoninout
+    /// `options.set` path silently ignores the `password` option (its type is
+    /// `password`, and the JSON setter only handles `text`/choice/bool/number
+    /// types), so a session started idle cannot be given a password over stdin.
+    /// Pass them on the command line for the connecting engine instead.
+    pub login: Option<String>,
+    pub password: Option<String>,
     /// Optional caller-chosen event stream tag. The UI sets this before the
     /// spawn so it can receive `engine.ready` even if it arrives before the
     /// command's response. Falls back to the process generation.
@@ -346,16 +353,22 @@ fn build_args(options: &StartOptions, profile: &Path) -> Vec<String> {
     let mut args = vec![
         "--jsoninout".to_string(),
         flag("path", profile.display()),
-        // Always start idle. Nimbus sends the account credentials over stdin
-        // (`options.set`) once the engine is ready, then triggers
-        // `mainaction.connect`. That keeps the password out of the process
-        // command line, where any local user could read it via /proc.
+        // Always start idle, then trigger `mainaction.connect` once ready.
+        // Eddie's jsoninout `options.set` ignores password-type options, so the
+        // connecting engine gets the credentials on its command line instead
+        // (see `StartOptions::login`). Idle engines are started without them.
         "--connect=false".to_string(),
         // Eddie defaults to remember=false, which calls DeAuth() on a clean
         // shutdown and would erase the saved session between our restarts.
         "--remember=true".to_string(),
     ];
 
+    if let Some(login) = options.login.as_deref().filter(|s| !s.is_empty()) {
+        args.push(flag("login", login.trim()));
+    }
+    if let Some(password) = options.password.as_deref().filter(|s| !s.is_empty()) {
+        args.push(flag("password", password));
+    }
     if let Some(server) = options.server.as_deref().filter(|s| !s.is_empty()) {
         args.push(flag("server", server));
     }
@@ -454,8 +467,10 @@ fn redact_json_password(line: &str) -> String {
 
 /// Eddie's `remember=true` mode saves every non-empty profile option, including
 /// the password. Nimbus keeps the authoritative copy in the OS keyring, so ask
-/// Eddie to clear it before the shutdown save. A hard crash can still leave an
-/// encrypted copy in the profile; it is never written in plaintext.
+/// Eddie to clear it before the shutdown save. The pinned engine's JSON setter
+/// currently ignores password-type options, making this best-effort there; it
+/// starts working if a newer engine handles the type. The profile is always
+/// encrypted, never plaintext.
 const CLEAR_PASSWORD: &[u8] =
     b"{\"command\":\"options.set\",\"name\":\"password\",\"value\":\"\"}\n";
 
@@ -677,7 +692,8 @@ fn disarm_inner(state: &EngineState) -> Result<AuthResult, String> {
 /// console client does exactly that on ready, and writes the authenticated
 /// `<user>` node (keys, certificates, expiry) into the profile. So sign-in is a
 /// short-lived console run against Nimbus's own profile; subsequent jsoninout
-/// sessions load that user and can connect without a password.
+/// sessions load that user, but still need the account password for Eddie's
+/// per-session authorization.
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AuthResult {
@@ -1181,7 +1197,26 @@ fn probe_latency(hosts: Vec<String>) -> Vec<Option<u32>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{redact, redact_json_password};
+    use super::{build_args, redact, redact_json_password, StartOptions};
+    use std::path::Path;
+
+    #[test]
+    fn connect_engine_receives_credentials() {
+        let options = StartOptions {
+            login: Some("user".into()),
+            password: Some("secret".into()),
+            ..Default::default()
+        };
+        let args = build_args(&options, Path::new("/tmp/nimbus-profile"));
+        assert!(args.iter().any(|arg| arg == "--login=user"));
+        assert!(args.iter().any(|arg| arg == "--password=secret"));
+        // The engine still starts idle; the UI triggers mainaction.connect.
+        assert!(args.iter().any(|arg| arg == "--connect=false"));
+
+        let idle = build_args(&StartOptions::default(), Path::new("/tmp/nimbus-profile"));
+        assert!(!idle.iter().any(|arg| arg.starts_with("--login=")));
+        assert!(!idle.iter().any(|arg| arg.starts_with("--password=")));
+    }
 
     #[test]
     fn redacts_raw_and_escaped_passwords() {

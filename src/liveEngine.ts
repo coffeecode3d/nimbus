@@ -31,6 +31,13 @@ export interface StartOptions {
   mode?: string;
   port?: number;
   netlock?: boolean;
+  /**
+   * Eddie's jsoninout `options.set` silently ignores the password option, so
+   * the connecting engine receives the account credentials on its command
+   * line instead of over stdin.
+   */
+  login?: string;
+  password?: string;
   /** Frontend-generated tag so early engine events are not dropped. */
   session?: string;
 }
@@ -180,9 +187,12 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const statusRef = useRef<ConnState>("disconnected");
   const optionsRef = useRef({ serverId, protocol, port, netlock });
   const connectTimer = useRef<number | null>(null);
+  /** Set when Eddie acknowledges the connect request with a pending/connected status. */
+  const connectAcked = useRef(false);
+  const connectRetry = useRef<number | null>(null);
   // Eddie's per-session `act=connect` authorization needs the account
-  // credentials, so keep them in memory for this app session. They are handed
-  // to Eddie over stdin and cleared from its profile on a clean shutdown.
+  // credentials, so keep them in memory for this app session. They are passed
+  // to the connecting engine on its command line; idle engines never see them.
   const credentialsRef = useRef<{ login: string; password: string } | null>(null);
   const pollTimer = useRef<number | null>(null);
   const mounted = useRef(true);
@@ -262,6 +272,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     }
   }, []);
 
+  const clearConnectRetry = useCallback(() => {
+    if (connectRetry.current !== null) {
+      window.clearInterval(connectRetry.current);
+      connectRetry.current = null;
+    }
+  }, []);
+
   const requestStats = useCallback(() => {
     void send({ command: "stats.list", callback: STATS_CALLBACK });
   }, [send]);
@@ -283,6 +300,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       startInFlight.current = true;
       if (!connect) wantedConnect.current = false;
       connectSent.current = false;
+      connectAcked.current = false;
+      clearConnectRetry();
       setStatus("starting");
       setError(null);
       readyRef.current = false;
@@ -316,6 +335,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         }, 75000);
       }
 
+      // Only a connecting engine needs the account password. Idle engines used
+      // to display the profile must not receive it.
+      const credentials = connect ? credentialsRef.current : null;
       const payload: StartOptions = {
         server: serverCode(options.serverId),
         protocol: options.protocol,
@@ -325,6 +347,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         // deactivate it over jsoninout, and a failed connect that leaves the
         // firewall armed locks the whole machine off the network.
         netlock: false,
+        login: credentials?.login,
+        password: credentials?.password,
         session: pendingSession,
       };
 
@@ -344,11 +368,12 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         return false;
       }
     },
-    [serverCode],
+    [serverCode, clearConnectRetry],
   );
 
   const abortConnect = useCallback((message: string) => {
     wantedConnect.current = false;
+    clearConnectRetry();
     if (connectTimer.current !== null) {
       window.clearTimeout(connectTimer.current);
       connectTimer.current = null;
@@ -374,7 +399,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
           disarming.current = false;
         });
     }
-  }, []);
+  }, [clearConnectRetry]);
 
   useEffect(() => {
     abortRef.current = abortConnect;
@@ -387,6 +412,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     const action = String(obj.action_icon ?? "");
     if (action === "connected") {
       wantedConnect.current = false;
+      connectAcked.current = true;
+      clearConnectRetry();
       if (connectTimer.current !== null) {
         window.clearTimeout(connectTimer.current);
         connectTimer.current = null;
@@ -400,6 +427,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     } else if (action === "pending") {
       // The engine has credentials and is working on a session; the earlier
       // "no connection available" was just the pre-login state.
+      connectAcked.current = true;
+      clearConnectRetry();
       if (connectTimer.current !== null) {
         window.clearTimeout(connectTimer.current);
         connectTimer.current = null;
@@ -422,7 +451,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     } else {
       setState("disconnected");
     }
-  }, [abortConnect]);
+  }, [abortConnect, clearConnectRetry]);
 
   const applyStats = useCallback(
     (list: Array<{ key: string; value: unknown }>) => {
@@ -465,35 +494,43 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         readyRef.current = true;
         setStatus("ready");
         requestStats();
-        // The engine always starts idle so the password never has to appear
-        // in its argv. Hand it the credentials over stdin, then connect.
+        // The credentials were passed on the engine's command line because
+        // Eddie's JSON `options.set` path ignores password-type options.
         if (wantedConnect.current && !connectSent.current) {
           connectSent.current = true;
-          const credentials = credentialsRef.current;
-          if (!credentials) {
+          if (!credentialsRef.current) {
             abortConnect(
               "Sign in from Settings → Account before connecting. Eddie needs your password to authorize the session.",
             );
           } else {
-            void (async () => {
-              const ok =
-                (await send({
-                  command: "options.set",
-                  name: "login",
-                  value: credentials.login,
-                })) &&
-                (await send({
-                  command: "options.set",
-                  name: "password",
-                  value: credentials.password,
-                })) &&
-                (await send({ command: "mainaction.connect" }));
-              if (!ok) {
-                abortConnect(
-                  "The engine did not accept the connection request. Try again.",
-                );
+            const requestConnect = () => {
+              void send({ command: "mainaction.connect" }).then((ok) => {
+                if (!ok) {
+                  clearConnectRetry();
+                  abortConnect(
+                    "The engine did not accept the connection request. Try again.",
+                  );
+                }
+              });
+            };
+            requestConnect();
+            // `engine.ready` is emitted before Eddie has populated its server
+            // list. A connect sent in that window is silently dropped by
+            // `CanConnect()`, so retry until the engine reports pending or
+            // connected. Repeated connects are harmless once a session exists.
+            let attempts = 0;
+            connectRetry.current = window.setInterval(() => {
+              if (
+                !wantedConnect.current ||
+                connectAcked.current ||
+                attempts >= 5
+              ) {
+                clearConnectRetry();
+                return;
               }
-            })();
+              attempts += 1;
+              requestConnect();
+            }, 2000);
           }
         }
       } else if (command === "engine.shutdown") {
@@ -542,7 +579,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         }
       }
     },
-    [abortConnect, applyStats, applyStatus, requestStats, send],
+    [abortConnect, applyStats, applyStatus, clearConnectRetry, requestStats, send],
   );
 
   /* --------------------------------------------------------------- lifecycle */
@@ -578,6 +615,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         if (event.payload !== session.current) return;
         if (disposed) return;
         readyRef.current = false;
+        wantedConnect.current = false;
+        clearConnectRetry();
         if (watchdog.current !== null) {
           window.clearTimeout(watchdog.current);
           watchdog.current = null;
@@ -604,9 +643,10 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     return () => {
       disposed = true;
       mounted.current = false;
+      clearConnectRetry();
       for (const stop of unlisten) stop();
     };
-  }, [enabled, handleLine]);
+  }, [enabled, handleLine, clearConnectRetry]);
 
   // The installer streams progress from the Rust side. Listening once at mount
   // avoids missing the first event between the click and a per-call listener.
@@ -671,6 +711,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const disconnect = useCallback(async () => {
     if (state === "disconnected" || state === "disconnecting") return;
     wantedConnect.current = false;
+    clearConnectRetry();
     if (watchdog.current !== null) {
       window.clearTimeout(watchdog.current);
       watchdog.current = null;
@@ -693,10 +734,11 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         setState((prev) => (prev === "disconnecting" ? "disconnected" : prev));
       }
     }, 6000);
-  }, [state, send]);
+  }, [state, send, clearConnectRetry]);
 
   const stopForUpdate = useCallback(async () => {
     wantedConnect.current = false;
+    clearConnectRetry();
     if (watchdog.current !== null) {
       window.clearTimeout(watchdog.current);
       watchdog.current = null;
@@ -713,7 +755,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       // The updater should still be allowed to proceed if the engine already
       // exited on its own.
     }
-  }, []);
+  }, [clearConnectRetry]);
 
   const toggle = useCallback(() => {
     if (state === "connected" || state === "connecting") void disconnect();
@@ -764,8 +806,10 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       credentialsRef.current = { login: account, password };
       setPasswordState("");
       setSignedIn(true);
-      // Load the freshly saved profile in the UI engine.
-      await start(optionsRef.current, false);
+      // The profile is saved by the console login. Do not start an idle engine
+      // here: a Connect click racing that start could reuse an engine spawned
+      // without credentials, and Eddie's JSON API cannot add a password later.
+      // Connect always starts its own engine with the credentials on argv.
       // Persist the password in the OS keyring so the next launch does not
       // ask for it again. Signing in still succeeds if the keyring is locked.
       void invoke("credentials_save", { login: account, password }).catch((err) => {
@@ -782,7 +826,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     } finally {
       setSigningIn(false);
     }
-  }, [login, password, start]);
+  }, [login, password]);
 
   const forgetSignIn = useCallback(async () => {
     const account = credentialsRef.current?.login || login.trim();

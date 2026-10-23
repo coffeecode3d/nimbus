@@ -83,7 +83,7 @@ function friendlyError(err: unknown): string {
  * a VPN client should not restart itself while a tunnel is up.
  */
 export function useUpdates(enabled: boolean): UpdatesApi {
-  const [currentVersion, setCurrentVersion] = useState("0.1.3");
+  const [currentVersion, setCurrentVersion] = useState("0.1.4");
   const [bundleKind, setBundleKind] = useState<BundleType | "development">("development");
   const [autoCheck, setAutoCheckState] = useState(readAutoCheck);
   const [checking, setChecking] = useState(false);

@@ -921,6 +921,14 @@ fn kill_orphan(profile: &Path) {
                 continue;
             };
             let cmdline = String::from_utf8_lossy(&cmdline);
+            // A zombie still has a readable (but empty) cmdline. Its pid file
+            // would otherwise make Eddie's single-instance check refuse to
+            // start a new engine forever, because /proc/<pid> continues to
+            // exist until the parent reaps it.
+            if cmdline.trim().is_empty() {
+                let _ = std::fs::remove_file(entry.path());
+                continue;
+            }
             if !cmdline.contains(&marker) {
                 continue;
             }

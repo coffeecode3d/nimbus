@@ -614,8 +614,14 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       const eof = await listen<string>("engine://eof", (event) => {
         if (event.payload !== session.current) return;
         if (disposed) return;
+        // Intentional stops clear `session` first, so an EOF that still
+        // matches this session means the engine died underneath us. That is
+        // not the same as the user disconnecting: Eddie's privileged helper can
+        // leave the tunnel up (or the network lock armed) after the CLI exits.
+        const wasActive = statusRef.current !== "disconnected";
         readyRef.current = false;
         wantedConnect.current = false;
+        connectAcked.current = false;
         clearConnectRetry();
         if (watchdog.current !== null) {
           window.clearTimeout(watchdog.current);
@@ -625,6 +631,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         setActualServerName(null);
         setState("disconnected");
         setStats(emptyStats());
+        if (wasActive) {
+          setError(
+            (previous) =>
+              previous ??
+              "Eddie's engine stopped unexpectedly. If the VPN is still active, click Connect to restart it.",
+          );
+        }
       });
       if (disposed) eof();
       else unlisten.push(eof);
@@ -907,11 +920,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const releaseNetlock = useCallback(async () => {
     if (releasingLock) return "";
     setReleasingLock(true);
+    // `engine_disarm` stops the current engine, so ignore its EOF event just
+    // like the other intentional shutdown paths.
+    session.current = null;
     try {
       const result = await invoke<{ ok: boolean; message: string }>("engine_disarm");
       if (result.ok) {
         setStatus("stopped");
-        session.current = null;
       }
       return result.message;
     } catch (err) {

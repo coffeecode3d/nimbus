@@ -64,6 +64,13 @@ struct Process {
     child: Child,
     stdin: Option<ChildStdin>,
     profile: PathBuf,
+    /// Session tag for the event stream. Used to reap only the process that
+    /// actually emitted EOF, never a replacement engine.
+    session: String,
+    /// Keeps the dedicated spawn thread alive. Linux's parent-death signal is
+    /// tied to the *thread* that called `fork`, not to the process as a whole.
+    /// Dropping this releases that thread once the engine has been stopped.
+    _release: Option<std::sync::mpsc::Sender<()>>,
 }
 
 pub struct EngineState {
@@ -970,6 +977,102 @@ pub fn engine_info(state: State<'_, EngineState>) -> EngineInfo {
     locate()
 }
 
+/// Spawn the long-running engine from a dedicated thread that stays alive for
+/// the child's lifetime.
+///
+/// `PR_SET_PDEATHSIG` belongs to the *thread* that created the child. The first
+/// version set it inside `spawn_blocking`, so when that Tokio worker went idle
+/// and exited, the kernel sent SIGTERM to the still-connected engine. The UI
+/// then received EOF, showed "disconnected", and left Eddie's privileged helper
+/// holding the tunnel. A dedicated anchor thread keeps the parent-death signal
+/// tied to Nimbus's lifetime, while `release` still lets it end cleanly after a
+/// normal stop.
+fn spawn_engine(
+    info: &EngineInfo,
+    args: Vec<String>,
+) -> std::io::Result<(Child, std::sync::mpsc::Sender<()>)> {
+    let (spawned_tx, spawned_rx) = std::sync::mpsc::channel::<std::io::Result<Child>>();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let cli = info.cli.clone();
+    let app_dir = info.app_dir.clone();
+
+    std::thread::spawn(move || {
+        let mut command = Command::new(&cli);
+        command
+            .current_dir(&app_dir)
+            .args(&args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        hide_console(&mut command);
+        sanitize_engine_env(&mut command);
+
+        // If the UI process dies unexpectedly, take the engine with it instead
+        // of leaving an orphan that holds Eddie's single-instance lock.
+        #[cfg(target_os = "linux")]
+        unsafe {
+            use std::os::unix::process::CommandExt;
+            command.pre_exec(|| {
+                libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+                Ok(())
+            });
+        }
+
+        match command.spawn() {
+            Ok(child) => match spawned_tx.send(Ok(child)) {
+                Ok(()) => {
+                    // Stay parked until the caller drops `release` after the
+                    // engine has been stopped and reaped.
+                    let _ = release_rx.recv();
+                }
+                Err(err) => {
+                    // The UI stopped waiting (or went away); do not leave a
+                    // stray engine behind.
+                    if let Ok(mut child) = err.0 {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
+            },
+            Err(err) => {
+                let _ = spawned_tx.send(Err(err));
+            }
+        }
+    });
+
+    match spawned_rx.recv_timeout(std::time::Duration::from_secs(15)) {
+        Ok(Ok(child)) => Ok((child, release_tx)),
+        Ok(Err(err)) => Err(err),
+        Err(_) => Err(std::io::Error::other(
+            "timed out waiting for eddie-cli to start",
+        )),
+    }
+}
+
+/// Reap the engine once its stdout closes. Without this, a child that exits on
+/// its own becomes a zombie and the Rust side keeps a dead `Process` around.
+/// The session tag prevents an old reader from touching a replacement engine.
+fn reap_exited_engine(app: &AppHandle, session: &str) {
+    use tauri::Manager;
+    for _ in 0..40 {
+        let state = app.state::<EngineState>();
+        let mut slot = state.process.lock().unwrap();
+        match slot.as_mut() {
+            Some(process) if process.session == session => match process.child.try_wait() {
+                Ok(Some(_)) | Err(_) => {
+                    *slot = None;
+                    return;
+                }
+                Ok(None) => {}
+            },
+            _ => return,
+        }
+        drop(slot);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+}
+
 #[tauri::command]
 pub async fn engine_start(app: AppHandle, options: StartOptions) -> Result<StartResult, String> {
     // Stopping the previous engine can take a few seconds if it is wedged.
@@ -1017,29 +1120,7 @@ fn start_inner(
         .unwrap_or_else(|| format!("e{generation}"));
     let args = build_args(&options, &profile);
 
-    let mut command = Command::new(&info.cli);
-    command
-        .current_dir(&info.app_dir)
-        .args(&args)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-
-    hide_console(&mut command);
-    sanitize_engine_env(&mut command);
-
-    // If the UI process dies unexpectedly, take the engine with it instead of
-    // leaving an orphan that holds Eddie's single-instance lock.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        use std::os::unix::process::CommandExt;
-        command.pre_exec(|| {
-            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
-            Ok(())
-        });
-    }
-
-    let mut child = command.spawn().map_err(|e| {
+    let (mut child, release) = spawn_engine(&info, args).map_err(|e| {
         let msg = format!("Could not start eddie-cli: {e}");
         *state.info.lock().unwrap() = Some(EngineInfo {
             error: Some(msg.clone()),
@@ -1056,6 +1137,8 @@ fn start_inner(
         child,
         stdin,
         profile: profile.clone(),
+        session: session.clone(),
+        _release: Some(release),
     });
     *state.info.lock().unwrap() = Some(info.clone());
 
@@ -1077,7 +1160,8 @@ fn start_inner(
                     serde_json::json!({ "session": session, "line": line }),
                 );
             }
-            let _ = app.emit("engine://eof", session);
+            let _ = app.emit("engine://eof", session.clone());
+            reap_exited_engine(&app, &session);
         });
     }
 
@@ -1216,6 +1300,39 @@ mod tests {
         let idle = build_args(&StartOptions::default(), Path::new("/tmp/nimbus-profile"));
         assert!(!idle.iter().any(|arg| arg.starts_with("--login=")));
         assert!(!idle.iter().any(|arg| arg.starts_with("--password=")));
+    }
+
+    /// The engine must not be tied to the transient worker that calls
+    /// `spawn_engine`. If it is, Linux delivers SIGTERM as soon as that thread
+    /// exits, which looks exactly like a successful connection that silently
+    /// drops back to disconnected while Eddie's tunnel remains up.
+    #[cfg(unix)]
+    #[test]
+    fn engine_outlives_the_thread_that_spawned_it() {
+        use super::{spawn_engine, EngineInfo};
+        use std::time::Duration;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let info = EngineInfo {
+                found: true,
+                cli: "sleep".into(),
+                app_dir: "/tmp".into(),
+                profile: "/tmp".into(),
+                error: None,
+            };
+            let _ = tx.send(spawn_engine(&info, vec!["30".into()]));
+        });
+
+        let result = rx.recv().expect("spawn result");
+        let (mut child, _release) = result.expect("spawn sleep");
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(
+            child.try_wait().expect("poll child").is_none(),
+            "engine was killed when its spawn helper thread exited"
+        );
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]

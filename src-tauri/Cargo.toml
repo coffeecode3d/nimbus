@@ -1,6 +1,6 @@
 [package]
 name = "app"
-version = "0.1.6"
+version = "0.1.7"
 description = "Unofficial Wayland-friendly AirVPN desktop client driving the official Eddie engine"
 authors = ["Nimbus contributors"]
 license = "GPL-3.0-or-later"

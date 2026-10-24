@@ -13,6 +13,8 @@ import type {
 
 const SAMPLES = 56;
 const STATS_CALLBACK = "nimbus.stats";
+const IS_WINDOWS =
+  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -91,7 +93,14 @@ export function parseRate(text: string | undefined): number {
 
 export function parseSeconds(text: string | undefined): number | null {
   if (!text) return null;
-  const match = text.trim().match(/^(?:(\d+)\s+days?,?\s+)?(\d+):(\d{1,2})(?::(\d{1,2}))?$/i);
+  // Eddie formats VpnStart as "HH:MM:SS - YYYY-MM-DD HH:MM:SS" (see
+  // Engine.OnRefreshUi). Older builds and other callers may omit the date or
+  // use a two-part MM:SS value, so accept both shapes.
+  const match = text
+    .trim()
+    .match(
+      /^(?:(\d+)\s+days?,?\s+)?(\d+):(\d{1,2})(?::(\d{1,2}))?(?:\s+-\s+.*)?$/i,
+    );
   if (!match) return null;
   if (match[4] !== undefined) {
     const days = Number(match[1] ?? 0);
@@ -120,6 +129,79 @@ const emptyStats = (): Stats => ({
   samples: new Array(SAMPLES).fill(0),
   upSamples: new Array(SAMPLES).fill(0),
 });
+
+/** One row of Eddie's `ui.network.chart` broadcast. */
+interface ChartInterface {
+  ts?: number;
+  total_rcv?: number;
+  total_snd?: number;
+  name?: string;
+  desc?: string;
+  live?: boolean;
+}
+
+interface ChartSample {
+  ts: number;
+  rcv: number;
+  snd: number;
+}
+
+const TUNNEL_INTERFACE = /eddie|airvpn|wireguard|wintun|tunnel|(^|[^a-z])(tap|tun)([^a-z]|$)/i;
+const LOOPBACK_INTERFACE = /loopback|(^|[^a-z])lo([^a-z]|$)/i;
+
+function chartBytesPerSecond(
+  interfaces: Record<string, ChartInterface>,
+  previous: Record<string, ChartSample>,
+): {
+  next: Record<string, ChartSample>;
+  down: number;
+  up: number;
+} {
+  const next: Record<string, ChartSample> = {};
+  let tunnel: { down: number; up: number; score: number } | null = null;
+  let busiest: { down: number; up: number; score: number } | null = null;
+
+  for (const [id, row] of Object.entries(interfaces)) {
+    if (!row || typeof row !== "object") continue;
+    const ts = Number(row.ts ?? 0);
+    const rcv = Number(row.total_rcv ?? 0);
+    const snd = Number(row.total_snd ?? 0);
+    if (
+      !Number.isFinite(ts) ||
+      ts <= 0 ||
+      !Number.isFinite(rcv) ||
+      !Number.isFinite(snd)
+    ) {
+      continue;
+    }
+    next[id] = { ts, rcv, snd };
+
+    const old = previous[id];
+    if (!old || ts <= old.ts) continue;
+    const seconds = ts - old.ts;
+    const down = Math.max(0, (rcv - old.rcv) / seconds / 1_000_000);
+    const up = Math.max(0, (snd - old.snd) / seconds / 1_000_000);
+    const score = down + up;
+    const label = `${row.name ?? ""} ${row.desc ?? ""}`;
+    const sample = { down, up, score };
+    const loopback = LOOPBACK_INTERFACE.test(label);
+
+    if (!loopback && (!busiest || score > busiest.score)) busiest = sample;
+    if (!loopback && TUNNEL_INTERFACE.test(label)) {
+      if (!tunnel || score > tunnel.score) tunnel = sample;
+    }
+  }
+
+  // Prefer the tunnel adapter. If Eddie's counters for it are unavailable
+  // (some Windows/WireGuardNT setups leave Connection.Interface null), fall
+  // back to the busiest physical adapter so the card still reflects activity.
+  const chosen = tunnel && tunnel.score > 0 ? tunnel : busiest;
+  return {
+    next,
+    down: Number((chosen?.down ?? 0).toFixed(2)),
+    up: Number((chosen?.up ?? 0).toFixed(2)),
+  };
+}
 
 /* ------------------------------------------------------------------- hooks */
 
@@ -195,6 +277,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   // to the connecting engine on its command line; idle engines never see them.
   const credentialsRef = useRef<{ login: string; password: string } | null>(null);
   const pollTimer = useRef<number | null>(null);
+  const chartPrevious = useRef<Record<string, ChartSample>>({});
+  const chartRate = useRef<{ down: number; up: number; at: number }>({
+    down: 0,
+    up: 0,
+    at: 0,
+  });
+  const lastStatsReply = useRef(0);
   const mounted = useRef(true);
   const restoredCredentials = useRef(false);
   // Bumped whenever the user edits credentials or signs in. A slow keyring
@@ -453,14 +542,62 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     }
   }, [abortConnect, clearConnectRetry]);
 
+  const applyNetworkChart = useCallback(
+    (interfaces: Record<string, ChartInterface>) => {
+      const { next, down, up } = chartBytesPerSecond(interfaces, chartPrevious.current);
+      chartPrevious.current = next;
+      const now = Date.now();
+      if (down > 0 || up > 0) {
+        chartRate.current = { down, up, at: now };
+      } else if (now - chartRate.current.at > 3000) {
+        chartRate.current = { down: 0, up: 0, at: 0 };
+      }
+
+      // If `stats.list` replies stop arriving on Windows, keep the card live
+      // from the chart broadcast instead of freezing at the last sample.
+      if (
+        IS_WINDOWS &&
+        statusRef.current === "connected" &&
+        (down > 0 || up > 0) &&
+        now - lastStatsReply.current > 2000
+      ) {
+        setStats((prev) => ({
+          ...prev,
+          down,
+          up,
+          samples: [...prev.samples.slice(1), down],
+          upSamples: [...prev.upSamples.slice(1), up],
+        }));
+      }
+    },
+    [],
+  );
+
   const applyStats = useCallback(
     (list: Array<{ key: string; value: unknown }>) => {
+      lastStatsReply.current = Date.now();
       const map: Record<string, string> = {};
       for (const row of list) map[String(row.key)] = String(row.value ?? "");
 
-      const down = parseRate(map.VpnSpeedDownload);
-      const up = parseRate(map.VpnSpeedUpload);
+      const listedDown = parseRate(map.VpnSpeedDownload);
+      const listedUp = parseRate(map.VpnSpeedUpload);
       const seconds = parseSeconds(map.VpnStart);
+
+      // `VpnSpeed*` comes from Eddie's Connection.Interface. On some Windows
+      // WireGuardNT installs that interface is never matched, so the values
+      // stay at zero even while the tunnel is passing traffic. The chart
+      // broadcast is independent of that lookup; use its freshest rates as a
+      // fallback instead of showing a permanently flat graph.
+      const chart = chartRate.current;
+      const chartFresh = Date.now() - chart.at < 3000;
+      const useChart =
+        IS_WINDOWS &&
+        listedDown === 0 &&
+        listedUp === 0 &&
+        chartFresh &&
+        (chart.down > 0 || chart.up > 0);
+      const down = useChart ? chart.down : listedDown;
+      const up = useChart ? chart.up : listedUp;
 
       setStats((prev) => ({
         down,
@@ -544,6 +681,10 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
           const seconds = parseSeconds(obj.value);
           if (seconds !== null) setStats((prev) => ({ ...prev, seconds }));
         }
+      } else if (command === "ui.network.chart") {
+        if (obj.interfaces && typeof obj.interfaces === "object") {
+          applyNetworkChart(obj.interfaces as Record<string, ChartInterface>);
+        }
       } else if (command === "reply" && obj.id === STATS_CALLBACK) {
         const body = obj.body as { list?: Array<{ key: string; value: unknown }> } | null;
         if (body?.list) applyStats(body.list);
@@ -579,7 +720,15 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         }
       }
     },
-    [abortConnect, applyStats, applyStatus, clearConnectRetry, requestStats, send],
+    [
+      abortConnect,
+      applyNetworkChart,
+      applyStats,
+      applyStatus,
+      clearConnectRetry,
+      requestStats,
+      send,
+    ],
   );
 
   /* --------------------------------------------------------------- lifecycle */

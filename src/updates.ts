@@ -4,7 +4,7 @@ import { check } from "@tauri-apps/plugin-updater";
 import type { Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 
-const CHECK_INTERVAL = 6 * 60 * 60 * 1000;
+const STARTUP_CHECK_DELAY = 4_000;
 const LAST_CHECK_KEY = "nimbus.updates.last-check";
 const AUTO_CHECK_KEY = "nimbus.updates.auto-check";
 
@@ -78,12 +78,13 @@ function friendlyError(err: unknown): string {
 /**
  * Signed, in-app updates for Nimbus itself (not the Eddie engine).
  *
- * Checks run at most every six hours when the app starts, and the user can
- * always ask for one from Settings. Installation is deliberately explicit:
- * a VPN client should not restart itself while a tunnel is up.
+ * When enabled, one check runs shortly after launch; there is no periodic
+ * background timer. The user can always ask for one from Settings. Installation
+ * is deliberately explicit: a VPN client should not restart itself while a
+ * tunnel is up.
  */
 export function useUpdates(enabled: boolean): UpdatesApi {
-  const [currentVersion, setCurrentVersion] = useState("0.1.7");
+  const [currentVersion, setCurrentVersion] = useState("0.1.8");
   const [bundleKind, setBundleKind] = useState<BundleType | "development">("development");
   const [autoCheck, setAutoCheckState] = useState(readAutoCheck);
   const [checking, setChecking] = useState(false);
@@ -170,7 +171,7 @@ export function useUpdates(enabled: boolean): UpdatesApi {
           setUpToDate(manual);
         }
       } catch (err) {
-        // Automatic checks stay quiet; otherwise a private repository or an
+        // Startup checks stay quiet; otherwise a private repository or an
         // offline laptop would produce a toast every launch.
         if (manual && mounted.current) setError(friendlyError(err));
       } finally {
@@ -192,15 +193,8 @@ export function useUpdates(enabled: boolean): UpdatesApi {
 
   useEffect(() => {
     if (!enabled || !autoCheck) return;
-    const last = readLastCheck() ?? 0;
-    const first = window.setTimeout(() => {
-      if (Date.now() - last >= CHECK_INTERVAL) void checkUpdate(false);
-    }, 4_000);
-    const timer = window.setInterval(() => void checkUpdate(false), CHECK_INTERVAL);
-    return () => {
-      window.clearTimeout(first);
-      window.clearInterval(timer);
-    };
+    const timer = window.setTimeout(() => void checkUpdate(false), STARTUP_CHECK_DELAY);
+    return () => window.clearTimeout(timer);
   }, [enabled, autoCheck, checkUpdate]);
 
   const install = useCallback(async () => {

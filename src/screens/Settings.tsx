@@ -285,11 +285,11 @@ export function SettingsScreen({
             </Button>
           </Field>
           <Field
-            title="Automatic checks"
-            desc="Look for a signed Nimbus release every six hours. Nothing is downloaded or installed until you approve it."
+            title="Check on startup"
+            desc="Look for a signed Nimbus release once when Nimbus starts. Nothing is downloaded or installed until you approve it."
           >
             <Toggle
-              label="Automatic update checks"
+              label="Check for updates on startup"
               checked={updates.autoCheck}
               onChange={updates.setAutoCheck}
               disabled={!updates.enabled || updates.installing}
@@ -377,7 +377,8 @@ export function SettingsScreen({
               <div className="update-copy">
                 <div className="update-title">Nimbus is up to date</div>
                 <p className="update-desc">
-                  You are running the newest published version. Nimbus checks again automatically.
+                  You are running the newest published version. Nimbus will check again the
+                  next time it starts.
                 </p>
               </div>
             </div>

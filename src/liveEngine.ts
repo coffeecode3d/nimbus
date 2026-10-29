@@ -13,8 +13,27 @@ import type {
 
 const SAMPLES = 56;
 const STATS_CALLBACK = "nimbus.stats";
+const SAVED_SERVER_KEY = "nimbus.server";
 const IS_WINDOWS =
   typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+
+/** A remembered server is a deliberate choice, so it wins over latency auto-pick. */
+function savedServerId(servers: ServerInfo[]): string | null {
+  try {
+    const id = localStorage.getItem(SAVED_SERVER_KEY);
+    return id && servers.some((s) => s.id === id) ? id : null;
+  } catch {
+    return null;
+  }
+}
+
+function rememberServer(id: string): void {
+  try {
+    if (id) localStorage.setItem(SAVED_SERVER_KEY, id);
+  } catch {
+    // A disabled localStorage should not break server selection.
+  }
+}
 
 export function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI_INTERNALS__" in window;
@@ -213,8 +232,15 @@ function chartBytesPerSecond(
  * by the Tauri side as `engine://line`.
  */
 export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineApi {
+  const [initialServer] = useState(() => {
+    const saved = savedServerId(servers);
+    return { id: saved ?? servers[0]?.id ?? "", saved: saved !== null };
+  });
   const [state, setState] = useState<ConnState>("disconnected");
-  const [serverId, setServerId] = useState(servers[0]?.id ?? "");
+  const [serverId, setServerId] = useState(initialServer.id);
+  // Until the user picks a server (or latency has selected one), replace the
+  // data-file default with the fastest measured entry IP.
+  const autoServerPending = useRef(!initialServer.saved);
   const [netlock, setNetlock] = useState(false);
   const [protocol, setProtocol] = useState<Protocol>("wireguard");
   const [port, setPort] = useState(443);
@@ -851,6 +877,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
 
   const connect = useCallback(async () => {
     if (state === "connecting" || state === "connected") return;
+    autoServerPending.current = false;
     // The saved profile is enough for the engine to know the account and its
     // keys, but Eddie's `act=connect` authorization still needs the password.
     if (!credentialsRef.current) {
@@ -928,6 +955,8 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     (id: string) => {
       // Update the ref immediately: callers often do selectServer(id) then
       // connect() in the same tick, before React commits the new state.
+      autoServerPending.current = false;
+      rememberServer(id);
       optionsRef.current = { ...optionsRef.current, serverId: id };
       setServerId(id);
       if (state === "connected" || state === "connecting") {
@@ -1092,11 +1121,33 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       const hosts = servers.map((s) => s.ip);
       const values = await invoke<Array<number | null>>("servers_latency", { hosts });
       const next: Record<string, number> = {};
+      let fastestId: string | null = null;
+      let fastestValue = Number.POSITIVE_INFINITY;
       servers.forEach((s, i) => {
         const value = values[i];
-        if (typeof value === "number") next[s.id] = value;
+        if (typeof value !== "number") return;
+        next[s.id] = value;
+        if (value < fastestValue) {
+          fastestValue = value;
+          fastestId = s.id;
+        }
       });
       setLatencies(next);
+
+      // The data file is ordered by continent, which made Brazil the default
+      // everywhere. Once measurements land, use the fastest entry IP unless
+      // the user has already chosen a server or started connecting.
+      if (
+        fastestId &&
+        autoServerPending.current &&
+        statusRef.current === "disconnected"
+      ) {
+        autoServerPending.current = false;
+        if (fastestId !== optionsRef.current.serverId) {
+          optionsRef.current = { ...optionsRef.current, serverId: fastestId };
+          setServerId(fastestId);
+        }
+      }
     } catch {
       // Latency is cosmetic; keep whatever we had.
     } finally {

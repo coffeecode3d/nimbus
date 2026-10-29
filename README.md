@@ -75,8 +75,8 @@ pnpm tauri build --bundles deb,appimage
 Outputs:
 
 ```
-src-tauri/target/release/bundle/deb/Nimbus_0.1.7_amd64.deb
-src-tauri/target/release/bundle/appimage/Nimbus_0.1.7_amd64.AppImage
+src-tauri/target/release/bundle/deb/Nimbus_0.1.8_amd64.deb
+src-tauri/target/release/bundle/appimage/Nimbus_0.1.8_amd64.AppImage
 ```
 
 On Windows:
@@ -86,11 +86,11 @@ pnpm install
 pnpm exec tauri build --bundles nsis
 ```
 
-Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.7_x64-setup.exe`.
+Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.8_x64-setup.exe`.
 CI builds both platforms with `.github/workflows/build.yml` (artifacts) and
 publishes signed releases from `v*` tags with `.github/workflows/release.yml`.
 
-Install the deb with `sudo apt install ./Nimbus_0.1.7_amd64.deb`, or mark the
+Install the deb with `sudo apt install ./Nimbus_0.1.8_amd64.deb`, or mark the
 AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
 Neither package bundles Eddie. On first launch, if `eddie-cli` is missing,
 Nimbus shows a **one-time engine setup** screen:
@@ -128,9 +128,10 @@ may show a warning.
 ## Updates
 
 Nimbus updates itself, not Eddie. The **Settings → About** button performs a
-real signed update check, and the app checks automatically about every six hours
-(opt-out in Settings). When a release is available, Settings shows the version
-and release notes plus **Update & restart**. Updates are downloaded, checked
+real signed update check, and the app checks once shortly after startup when
+**Check for updates on startup** is enabled (opt-out in Settings). When a
+release is available, Settings shows the version and release notes plus
+**Update & restart**. Updates are downloaded, checked
 against the Tauri minisign public key in `src-tauri/tauri.conf.json`, installed,
 and the app relaunches. Nimbus stops its Eddie engine before replacing itself,
 and refuses to install while a tunnel is connected or connecting.
@@ -267,7 +268,7 @@ CLI/profile options.
 - The main screen answers four questions in one glance: am I protected, where
   am I exiting, what is my IP/protocol, and is the kill switch on.
 - Servers are searchable and sorted by latency, with live load and favorites —
-  not a 40-column tree grid.
+  not a 40-column tree grid. The fastest measured server is selected on launch.
 - Settings are plain language, with the trade-off spelled out. Advanced Eddie
   options stay in the profile.
 - Colour is state, not decoration: grey/blue/yellow/green/red.
@@ -308,7 +309,7 @@ inline script, so there is no flash of the wrong theme on launch.
    state colour.
 6. ~~**Packaging** — deb/AppImage with a verified first-run engine installer
    (`/opt/eddie-ui`) and "Eddie not found" onboarding.~~
-7. ~~**Nimbus updates** — signed self-updates with automatic checks, download
+7. ~~**Nimbus updates** — signed self-updates with startup checks, download
    progress, install and relaunch.~~
 8. **Engine updates** — compare the installed Eddie version with AirVPN's
    stable release, then offer a verified update that preserves the helper.

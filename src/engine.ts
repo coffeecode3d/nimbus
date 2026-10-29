@@ -77,7 +77,18 @@ function mockLatency(s: ServerInfo): number {
  */
 export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi {
   const [state, setState] = useState<ConnState>(initialConn);
-  const [serverId, setServerId] = useState(servers[0]?.id ?? "");
+  const [serverId, setServerId] = useState(() => {
+    let fastest = servers[0];
+    let best = Number.POSITIVE_INFINITY;
+    for (const server of servers) {
+      const latency = mockLatency(server);
+      if (latency < best) {
+        best = latency;
+        fastest = server;
+      }
+    }
+    return fastest?.id ?? "";
+  });
   const [netlock, setNetlock] = useState(false);
   const [protocol, setProtocol] = useState<Protocol>("wireguard");
   const [port, setPort] = useState(443);

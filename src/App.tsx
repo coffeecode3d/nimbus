@@ -6,6 +6,7 @@ import type { View } from "./types";
 import serversJson from "./servers.json";
 import type { ServerInfo } from "./types";
 import { BrandMark, ChevronRight, Globe, Moon, Power, Sliders, Sun } from "./icons";
+import { Spinner } from "./components";
 import { ConnectScreen } from "./screens/Connect";
 import { EngineSetup } from "./screens/EngineSetup";
 import { ServersScreen } from "./screens/Servers";
@@ -95,6 +96,17 @@ export function App() {
             >
               <Icon size={18} />
               <span className="nav-label">{label}</span>
+              {id === "connect" &&
+                (engine.state === "connecting" || engine.state === "disconnecting") && (
+                  <span
+                    className="nav-busy"
+                    aria-label={
+                      engine.state === "connecting" ? "Connecting" : "Disconnecting"
+                    }
+                  >
+                    <Spinner size={11} />
+                  </span>
+                )}
               {id === "servers" && <span className="nav-count">{servers.length}</span>}
               {id === "settings" && updates.info && (
                 <span
@@ -152,7 +164,13 @@ export function App() {
         {view === "connect" && (
           <ConnectScreen engine={engine} onOpenServers={() => setView("servers")} notify={notify} />
         )}
-        {view === "servers" && <ServersScreen engine={engine} notify={notify} />}
+        {view === "servers" && (
+          <ServersScreen
+            engine={engine}
+            notify={notify}
+            onOpenConnect={() => setView("connect")}
+          />
+        )}
         {view === "settings" && (
           <SettingsScreen
             engine={engine}

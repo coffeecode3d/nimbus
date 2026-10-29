@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { Engine } from "../engine";
-import { Button, Cc, LoadBar } from "../components";
+import { Button, Cc, LoadBar, Spinner } from "../components";
 import { Search, Star, X } from "../icons";
 
 const fmtUsers = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
@@ -11,15 +11,18 @@ type Sort = "latency" | "load" | "name";
 export function ServersScreen({
   engine,
   notify,
+  onOpenConnect,
 }: {
   engine: Engine;
   notify: (msg: string) => void;
+  onOpenConnect: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
   const [sort, setSort] = useState<Sort>("latency");
   const [browseId, setBrowseId] = useState(engine.serverId);
   const input = useRef<HTMLInputElement>(null);
+  const browseTouched = useRef(false);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -35,6 +38,12 @@ export function ServersScreen({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
+
+  // Follow the selected server when latency auto-pick runs on startup, but
+  // never override a row the user has already clicked.
+  useEffect(() => {
+    if (!browseTouched.current) setBrowseId(engine.serverId);
+  }, [engine.serverId]);
 
   const latencyOf = engine.latencyFor;
 
@@ -79,15 +88,25 @@ export function ServersScreen({
   const selected = engine.servers.find((s) => s.id === browseId) ?? engine.servers[0];
   const isCurrent = selected.id === engine.serverId;
   const favorite = engine.favorites.includes(selected.id);
+  const connecting = engine.state === "connecting";
+  const disconnecting = engine.state === "disconnecting";
+  const currentBusy = isCurrent && (connecting || disconnecting);
+
+  const connectTo = (server: (typeof engine.servers)[number]) => {
+    if (disconnecting) return;
+    if (server.id === engine.serverId && (engine.connected || connecting)) return;
+    if (server.id !== engine.serverId) engine.selectServer(server.id);
+    engine.connect();
+    notify(`Connecting to ${server.name}`);
+  };
 
   const primary = () => {
     if (isCurrent && engine.connected) {
       engine.disconnect();
       return;
     }
-    if (!isCurrent) engine.selectServer(selected.id);
-    engine.connect();
-    notify(`Connecting to ${selected.name}`);
+    if (currentBusy) return;
+    connectTo(selected);
   };
 
   const total = groups.reduce((n, [, arr]) => n + arr.length, 0);
@@ -119,6 +138,27 @@ export function ServersScreen({
           <kbd>{/Mac/i.test(navigator.userAgent) ? "⌘K" : "Ctrl K"}</kbd>
         </div>
       </header>
+
+      {(connecting || disconnecting) && (
+        <div
+          className={`servers-status is-${engine.state}`}
+          role="status"
+          aria-live="polite"
+        >
+          <Spinner size={14} />
+          <span className="servers-status-text">
+            {connecting ? "Connecting to" : "Disconnecting from"}{" "}
+            <strong>{engine.server.name}</strong>
+            <span className="servers-status-meta">
+              {" "}
+              · {engine.server.city}, {engine.server.country}
+            </span>
+          </span>
+          <button type="button" className="servers-status-link" onClick={onOpenConnect}>
+            View connection
+          </button>
+        </div>
+      )}
 
       <div className="filters">
         {(["all", "favorites", "recent"] as Filter[]).map((f) => (
@@ -170,25 +210,40 @@ export function ServersScreen({
               {items.map((s) => {
                 const active = s.id === browseId;
                 const live = s.id === engine.serverId && engine.connected;
+                const connectingRow = connecting && s.id === engine.serverId;
+                const disconnectingRow = disconnecting && s.id === engine.serverId;
                 const fav = engine.favorites.includes(s.id);
                 return (
                   <button
                     type="button"
                     role="listitem"
                     key={s.id}
-                    className={`row${active ? " is-active" : ""}`}
-                    onClick={() => setBrowseId(s.id)}
-                    onDoubleClick={() => {
+                    className={`row${active ? " is-active" : ""}${connectingRow ? " is-connecting" : ""}`}
+                    onClick={() => {
+                      browseTouched.current = true;
                       setBrowseId(s.id);
-                      engine.selectServer(s.id);
-                      engine.connect();
+                    }}
+                    onDoubleClick={() => {
+                      browseTouched.current = true;
+                      setBrowseId(s.id);
+                      connectTo(s);
                     }}
                   >
-                    <span className={`cc${live ? " is-live" : ""}`}>{s.cc}</span>
+                    <span className={`cc${live ? " is-live" : ""}${connectingRow ? " is-busy" : ""}`}>
+                      {s.cc}
+                    </span>
                     <span className="row-main">
                       <span className="row-name">
                         {s.name}
                         {s.id === fastest && <span className="tag">Fastest</span>}
+                        {connectingRow && (
+                          <span className="tag tag-connecting">
+                            <Spinner size={9} /> Connecting
+                          </span>
+                        )}
+                        {disconnectingRow && (
+                          <span className="tag tag-disconnecting">Disconnecting</span>
+                        )}
                       </span>
                       <span className="row-sub">{s.city}</span>
                     </span>
@@ -263,12 +318,26 @@ export function ServersScreen({
 
           <div className="detail-ip mono">{selected.ip}</div>
 
-          <Button wide variant={isCurrent && engine.connected ? "ghost" : "primary"} onClick={primary}>
-            {isCurrent && engine.connected
-              ? "Disconnect"
-              : isCurrent
-                ? "Connect"
-                : "Connect here"}
+          <Button
+            wide
+            variant={isCurrent && engine.connected ? "ghost" : "primary"}
+            onClick={primary}
+            disabled={disconnecting || currentBusy}
+            loading={currentBusy}
+          >
+            {isCurrent && engine.connected ? (
+              "Disconnect"
+            ) : isCurrent && connecting ? (
+              <>
+                <Spinner /> Connecting…
+              </>
+            ) : isCurrent && disconnecting ? (
+              "Disconnecting…"
+            ) : isCurrent ? (
+              "Connect"
+            ) : (
+              "Connect here"
+            )}
           </Button>
 
           <button type="button" className="link-btn" onClick={() => engine.toggleFavorite(selected.id)}>

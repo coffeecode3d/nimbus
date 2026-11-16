@@ -33,6 +33,12 @@ pub const PIPE_NAME: &str = r"\\.\pipe\nimbus-split";
 /// Service name, as registered with the Service Control Manager.
 pub const SERVICE_NAME: &str = "nimbus-split";
 
+/// Kernel service name for the signed driver.
+pub const DRIVER_SERVICE: &str = "nimbus-split-tunnel";
+
+/// Where the driver file lands under `%SystemRoot%\System32\drivers`.
+const DRIVER_FILE: &str = "nimbus-split-tunnel.sys";
+
 /// How long the driver thread waits for an event before checking for commands.
 const EVENT_WAIT_MS: u32 = 500;
 
@@ -350,8 +356,8 @@ pub fn serve_foreground() -> Result<(), String> {
 use windows_sys::Win32::System::Services::{
     CloseServiceHandle, ControlService, CreateServiceW, DeleteService, OpenSCManagerW,
     OpenServiceW, QueryServiceStatus, StartServiceW, SC_MANAGER_ALL_ACCESS, SERVICE_ALL_ACCESS,
-    SERVICE_AUTO_START, SERVICE_CONTROL_STOP, SERVICE_ERROR_NORMAL, SERVICE_STATUS,
-    SERVICE_STOPPED, SERVICE_WIN32_OWN_PROCESS,
+    SERVICE_AUTO_START, SERVICE_CONTROL_STOP, SERVICE_DEMAND_START, SERVICE_ERROR_NORMAL,
+    SERVICE_KERNEL_DRIVER, SERVICE_STATUS, SERVICE_STOPPED, SERVICE_WIN32_OWN_PROCESS,
 };
 
 /// Register this binary as a service and start it.
@@ -494,6 +500,126 @@ pub fn uninstall() -> Result<(), String> {
         CloseServiceHandle(manager);
     }
     println!("{SERVICE_NAME} removed");
+    Ok(())
+}
+
+/// Copy the signed driver into place and register it as a kernel service.
+///
+/// This lives here rather than in the installer because a 32-bit NSIS process
+/// resolves `$SYSDIR` to `SysWOW64` under WOW64 file-system redirection, so the
+/// driver ends up where the kernel will not load it from. This binary is
+/// 64-bit, so `%SystemRoot%\System32` is what it says it is.
+pub fn install_driver(source: &str) -> Result<(), String> {
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let target = format!("{system_root}\\System32\\drivers\\{DRIVER_FILE}");
+
+    std::fs::copy(source, &target)
+        .map_err(|e| format!("could not copy the driver to {target}: {e}"))?;
+
+    let wide = |value: &str| -> Vec<u16> {
+        std::ffi::OsStr::new(value)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect()
+    };
+    let name = wide(DRIVER_SERVICE);
+    let display = wide("Nimbus split tunnel driver");
+    let binary = wide(&target);
+
+    // SAFETY: null machine name means the local SCM; strings are NUL-terminated.
+    let manager = unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_ALL_ACCESS) };
+    if manager == 0 {
+        return Err(format!(
+            "could not open the Service Control Manager (error {})",
+            // SAFETY: GetLastError has no preconditions.
+            unsafe { GetLastError() }
+        ));
+    }
+
+    // SAFETY: arguments are valid and NUL-terminated.
+    let service = unsafe {
+        CreateServiceW(
+            manager,
+            name.as_ptr(),
+            display.as_ptr(),
+            SERVICE_ALL_ACCESS,
+            SERVICE_KERNEL_DRIVER,
+            SERVICE_DEMAND_START,
+            SERVICE_ERROR_NORMAL,
+            binary.as_ptr(),
+            std::ptr::null(),
+            std::ptr::null_mut(),
+            std::ptr::null(),
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+
+    let service = if service == 0 {
+        // SAFETY: GetLastError has no preconditions.
+        let error = unsafe { GetLastError() };
+        if error != 1073 {
+            // SAFETY: the manager handle came from the SCM.
+            unsafe { CloseServiceHandle(manager) };
+            return Err(format!("could not create the driver service (error {error})"));
+        }
+        // SAFETY: valid handle and NUL-terminated name.
+        unsafe { OpenServiceW(manager, name.as_ptr(), SERVICE_ALL_ACCESS) }
+    } else {
+        service
+    };
+
+    if service == 0 {
+        // SAFETY: the manager handle came from the SCM.
+        unsafe { CloseServiceHandle(manager) };
+        return Err("could not open the driver service".to_string());
+    }
+
+    // SAFETY: a valid handle from CreateServiceW/OpenServiceW.
+    let started = unsafe { StartServiceW(service, 0, std::ptr::null()) } != 0;
+    // SAFETY: GetLastError has no preconditions.
+    let error = unsafe { GetLastError() };
+    // SAFETY: both handles came from the SCM and are closed once.
+    unsafe {
+        CloseServiceHandle(service);
+        CloseServiceHandle(manager);
+    }
+
+    if !started && error != 1056 {
+        return Err(format!("the driver was installed but did not start (error {error})"));
+    }
+    println!("{DRIVER_SERVICE} installed from {target}");
+    Ok(())
+}
+
+/// Stop and remove the driver service, and delete the copied `.sys`.
+pub fn uninstall_driver() -> Result<(), String> {
+    let name: Vec<u16> = DRIVER_SERVICE
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    // SAFETY: null machine name means the local SCM.
+    let manager = unsafe { OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_ALL_ACCESS) };
+    if manager != 0 {
+        // SAFETY: valid handle and NUL-terminated name.
+        let service = unsafe { OpenServiceW(manager, name.as_ptr(), SERVICE_ALL_ACCESS) };
+        if service != 0 {
+            let mut status: SERVICE_STATUS = unsafe { std::mem::zeroed() };
+            // SAFETY: valid handle and properly sized status struct.
+            unsafe { ControlService(service, SERVICE_CONTROL_STOP, &mut status) };
+            // SAFETY: valid handle from OpenServiceW.
+            unsafe { DeleteService(service) };
+            // SAFETY: the handle came from OpenServiceW.
+            unsafe { CloseServiceHandle(service) };
+        }
+        // SAFETY: the manager handle came from the SCM.
+        unsafe { CloseServiceHandle(manager) };
+    }
+
+    let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+    let _ = std::fs::remove_file(format!("{system_root}\\System32\\drivers\\{DRIVER_FILE}"));
+    println!("{DRIVER_SERVICE} removed");
     Ok(())
 }
 

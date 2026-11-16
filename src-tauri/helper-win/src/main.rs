@@ -36,6 +36,18 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        [flag, path] if flag == "--install-driver" => {
+            if let Err(error) = nimbus_split_win::service::install_driver(path) {
+                eprintln!("nimbus-split-win: {error}");
+                std::process::exit(1);
+            }
+        }
+        [flag] if flag == "--uninstall-driver" => {
+            if let Err(error) = nimbus_split_win::service::uninstall_driver() {
+                eprintln!("nimbus-split-win: {error}");
+                std::process::exit(1);
+            }
+        }
         [flag, path] if flag == "--session" => {
             if let Err(error) = nimbus_split_win::driver::run_console_session(path) {
                 eprintln!("nimbus-split-win: {error}");

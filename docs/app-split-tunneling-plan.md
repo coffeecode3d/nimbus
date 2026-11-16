@@ -377,12 +377,17 @@ still be exercised without a live tunnel by passing explicit addresses.
 
 Remaining before it ships:
 
-1. Vendor the signed `mullvad-split-tunnel.sys` (from their installer) and
-   install it from NSIS, with the GPL-3.0 attribution already in `NOTICE`.
-2. Wrap the agent in a Windows service with a named-pipe API, so the
-   unprivileged UI can send the exclude list.
-3. UI: an exclude-mode toggle on the Apps page for Windows.
-4. Validate the state machine against the real driver in a Windows VM.
+1. ~~Vendor the signed `mullvad-split-tunnel.sys` and install it from NSIS.~~
+   Done: `src-tauri/driver/` holds the unmodified driver with its provenance,
+   and `src-tauri/nsis/hooks.nsh` registers it and the service.
+2. ~~Wrap the agent in a Windows service with a named-pipe API.~~ Done:
+   `service.rs` owns the driver as LocalSystem and serves
+   `\\.\pipe\nimbus-split` with the same JSON commands as the Linux helper.
+3. ~~UI: an exclude-mode toggle on the Apps page for Windows.~~ Done: the page
+   derives its wording from `APP_SPLIT_MODE`.
+4. Validated against the real driver in a Windows VM — see 5.5. The installer
+   path itself is written but has only been exercised by hand on a test machine,
+   not by running the produced NSIS package.
 
 ### 5.4 Test VM
 
@@ -448,8 +453,39 @@ findings, in the order they bit:
   the 4 GB boundary, which also yields `No mapping`. Building from an extracted
   tree with `-as mkisofs` puts the boot images near the start and works.
 
-## 5a. Windows design (original notes)
+### 5.7 The service, and the three ways it can wedge
 
+`nimbus-split-win --service` is the Windows counterpart to `nimbus-helper`: a
+LocalSystem service that owns the driver and serves `\\.\pipe\nimbus-split`
+with the same one-request-per-line JSON commands. `--install` / `--uninstall`
+register it rather than NSIS constructing an `sc.exe` command line, because that
+line contains the install path and that is the part installers get wrong.
+
+Each of these presented as "the service stops answering":
+
+- **A bounded wait on the driver's event dequeue deadlocks.** `DEQUEUE_EVENT` is
+  an inverted call, and the request it parks cannot be cancelled from user mode,
+  so a `CancelIoEx` + timeout never returns. A thread that waits on it can never
+  answer `end`. The driver caps its queue at 100 events and discards the oldest,
+  so the service does not drain events at all; the policy does not need them.
+- **A SYSTEM+Administrators DACL excludes the UI.** The desktop app runs with a
+  UAC-filtered token, which cannot use a DACL granted to the Administrators
+  group. Verified: an unelevated desktop client got `Access is denied`, while
+  the same client over SSH (a network logon) succeeded. The pipe therefore also
+  grants INTERACTIVE — with the trade-off written down where the DACL lives.
+- **Stopping hangs in `STOP_PENDING`** because the pipe loop is parked in
+  `ConnectNamedPipe` and never sees the stop flag. That also leaves the binary
+  locked, so an upgrade cannot replace it. The stop handler makes a throwaway
+  connection to unblock the loop, and uninstall waits for the process to exit
+  before returning.
+
+Windows installs the service from `src-tauri/nsis/hooks.nsh`; the driver and the
+service binary are copied by `bundle.resources` in `tauri.windows.conf.json`,
+which also overrides `beforeBuildCommand` to build `nimbus-split-win` for the
+host. The installer path has been exercised by hand on the test machine but the
+produced NSIS package has not itself been run.
+
+## 5a. Windows design (original notes)
 ### 5.1 Why user mode is not enough
 
 - WFP user-mode filters can permit/block, but they cannot choose a different

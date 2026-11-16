@@ -259,9 +259,27 @@ removes them on disconnect; Nimbus never edits routes or firewall rules.
   tunnel, so a hostname can resolve to an address that is not excluded. Prefer
   numeric addresses or CIDRs.
 
-App-based split tunneling is not available: it needs process tracking in a
-privileged component (cgroups/nftables on Linux, a signed WFP driver on
-Windows), which would cross Nimbus's UI-only boundary.
+### Per-application split tunneling
+
+**Apps** (in the sidebar) routes individual applications rather than destinations.
+The list is kept in `localStorage` and handed to a small privileged component,
+never to Eddie:
+
+- **Linux** is *include* mode. `nimbus-helper`, a systemd unit running as root,
+  moves the selected apps into a cgroup, marks their packets with
+  `iptables`, and installs a policy route so marked traffic uses the tunnel.
+  Eddie runs with `network.ipv4.mode=out`, so only those apps use the VPN.
+- **Windows** is *exclude* mode. Per-app routing there needs a WFP driver, and
+  Windows only loads drivers signed by Microsoft. Nimbus drives Mullvad's
+  signed GPL-3.0 driver from a LocalSystem service; Eddie stays in its normal
+  `in` mode and the selected apps bypass the VPN. See `NOTICE`.
+
+The two are opposites, and the page says which one it is doing. Neither Nimbus
+itself nor the UI runs privileged code: they can only send a list of
+applications, and the privileged side decides what that list is allowed to
+touch. In include mode a failure to install the policy disconnects rather than
+leaving everything outside the VPN; in exclude mode a failure simply leaves the
+apps inside it.
 
 ## Probe the real engine
 

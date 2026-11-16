@@ -9,6 +9,12 @@
 # Static linking applies to every crate built for this target in the workspace,
 # Nimbus itself included, which also removes the redistributable from the app's
 # own requirements.
+#
+# This lives at the repository root, not in src-tauri: cargo reads configuration
+# by walking up from the *working directory*, and the service is built from the
+# root (`cargo build --manifest-path src-tauri/Cargo.toml`), so a config inside
+# src-tauri never applied to it. Verified by checking the produced binary for a
+# VCRUNTIME140.dll import.
 
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "target-feature=+crt-static"]

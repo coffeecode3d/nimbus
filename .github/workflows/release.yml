@@ -65,6 +65,26 @@ jobs:
           tagName: ${{ github.ref_name }}
           releaseName: "Nimbus ${{ github.ref_name }}"
           releaseBody: |
+            Nimbus 0.2.0 adds per-application split tunneling, as a first-class
+            **Apps** page in the sidebar (Ctrl+3).
+
+            The same list means opposite things per platform, and the page says
+            which one it is doing:
+
+            - **Linux — include mode.** Choose the apps that use the VPN;
+              everything else keeps your normal connection. A root systemd helper
+              puts the selected apps in a cgroup, marks their packets and installs
+              a policy route; Eddie runs with `network.ipv4.mode=out`.
+            - **Windows — exclude mode.** Choose the apps that bypass the VPN;
+              everything else stays inside it. Per-app routing needs a WFP driver
+              and Windows only loads drivers signed by Microsoft, so Nimbus drives
+              Mullvad's signed GPL-3.0 driver from a LocalSystem service instead of
+              shipping one of its own. Eddie stays in its normal `in` mode.
+
+            Nimbus itself never runs privileged code on either platform: it can
+            only send a list of applications, and the privileged side decides what
+            that list may touch.
+
             Signed Nimbus desktop builds. Linux self-updates use the AppImage;
             Debian/Ubuntu users should install the new `.deb` with apt or their
             package manager. Windows uses the NSIS installer.

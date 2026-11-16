@@ -328,14 +328,17 @@ Remaining before it ships:
 Testing this from Linux needs a real Windows guest, because the driver only
 loads on Windows and only when it is signed. The development laptop runs:
 
-    ~/VMs/win11/run.sh cd    # first boot: unattended install
+    ~/VMs/win11/run.sh cd    # first boot: install from the ISO
     ~/VMs/win11/run.sh disk  # afterwards
 
-QEMU/KVM with OVMF, an unattended Windows 11 Enterprise Evaluation install, a
-local administrator (`nimbus`) and OpenSSH enabled on first logon, so the guest
-is driven over `ssh -p 2222` instead of the GUI. VNC on `127.0.0.1:5901` and a
-QEMU monitor socket exist for the moments a screenshot is the only way to see
-what is happening.
+QEMU/KVM with OVMF and an answer file in the root of a remastered Windows 11
+Enterprise Evaluation ISO. The unattended parts are the hardware-gate bypass,
+the local administrator (`nimbus`) and OpenSSH, which is enabled on first logon
+so the guest is driven over `ssh -p 2222` instead of the GUI. One keystroke is
+still needed: the partition page, where accepting "Disk 0 Unallocated Space"
+lets Setup create the partitions. VNC on `127.0.0.1:5901` and a QEMU monitor
+socket exist for the moments a screenshot is the only way to see what is
+happening.
 
 Installing Windows unattended on top of QEMU cost a day of debugging. The
 findings, in the order they bit:
@@ -359,13 +362,25 @@ findings, in the order they bit:
 - **The hardware gate is evaluated in `windowsPE`, not `specialize`.** Writing
   `BypassTPMCheck` from the `specialize` pass is too late — Setup has already
   refused. It must be a `RunSynchronous` command in the `windowsPE` pass.
-- **Windows media is a UDF/ISO9660 hybrid.** `install.wim` is over 4 GiB, so
-  rebuilding the ISO as plain ISO9660 turns it into multi-extent continuation
-  areas and Setup dies part-way through applying the image ("installation has
-  failed" at 55%). Either keep UDF, or — what we do, because this `xorriso` has
-  no UDF writer — split the image with `wimlib-imagex split install.wim
-  install.swm 3800` so every file is under 4 GiB. This is the same trick Rufus
-  uses for FAT32 sticks, and Setup reads `install.swm` transparently.
+- **Windows media is a UDF/ISO9660 hybrid**, and `install.wim` is over 4 GiB.
+  This `xorriso` has no UDF writer, so the rebuild is plain ISO9660 and the image
+  is split with `wimlib-imagex split install.wim install.swm 3800` to keep every
+  file under 4 GiB — the same trick Rufus uses for FAT32 sticks, which Setup
+  reads transparently.
+- **A bad `<DiskConfiguration>` fails twice, far apart.** Setup rejects the block
+  early with `UnattendProcessDiskConfigInfo: An internal error occurred while
+  parsing unattend disk configuration` (`0x8007000D`), quietly falls back to the
+  interactive partition page, and then fails *fatally* at PreFinalize in
+  `CFixUnattendDrivePaths` — after the image has been applied, which is why it
+  presents as "installation has failed" at around 55%. The fix was to delete the
+  block entirely: leaving the disk unallocated means one Enter on the partition
+  page and Setup lays out EFI/MSR/Primary itself, with the rest of the answer
+  file still applying.
+- **Read `setuperr.log` off the disk image rather than guessing from
+  screenshots.** The target volume keeps
+  `\$Windows.~BT\Sources\Panther\setuperr.log`, and it can be read by attaching
+  the qcow2 with `qemu-nbd -c /dev/nbd0 --read-only` and mounting the NTFS
+  partition read-only. Screenshots tell you *when* it broke; this tells you why.
 - **A remastered ISO must keep the El Torito UEFI entry's load size.** `xorriso`
   `-boot_image any replay` writes `load size 0` and OVMF refuses it with
   `No mapping`; `keep` preserves the value but can relocate the boot image past

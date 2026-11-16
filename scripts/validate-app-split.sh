@@ -76,10 +76,17 @@ ip addr add 10.99.0.1/24 dev "$DEV"
 ip -br addr show "$DEV" | tee -a "$LOG"
 
 # ── phase 1: policy installed ─────────────────────────────────────────────
-say "== phase 1: probe as $USER_NAME with the policy active"
-as_user "$PROBE" >"$WORK/probe1.log" 2>&1 &
+say "== phase 1: probes as $USER_NAME with the policy active"
+# Three instances, not one: `cgroup.procs` accepts exactly one PID per write, so
+# a single-process test would not catch a batched write that fails with EINVAL
+# (which is what happened the first time a real browser was selected).
+for i in 1 2 3; do
+  as_user "$PROBE" >>"$WORK/probe1.log" 2>&1 &
+done
 sleep 1
-PROBE_PID=$(pgrep -u "$USER_UID" -f "$PROBE" | head -1)
+PROBE_PIDS=$(pgrep -u "$USER_UID" -f "$PROBE" | tr '\n' ' ')
+PROBE_PID=$(echo "$PROBE_PIDS" | awk '{print $1}')
+say "probe pids: $PROBE_PIDS"
 
 "$HELPER" enforce --apps nimbus-probe --tunnel "$DEV" >"$WORK/enforce.log" 2>&1 &
 ENFORCE_PID=$!
@@ -87,10 +94,11 @@ sleep 2
 
 say "-- status:"
 "$HELPER" status | tee -a "$LOG"
-if grep -qx "$PROBE_PID" /sys/fs/cgroup/nimbus.apps/cgroup.procs 2>/dev/null; then
-  pass "probe adopted into cgroup"
+ADOPTED=$(grep -c . /sys/fs/cgroup/nimbus.apps/cgroup.procs 2>/dev/null || echo 0)
+if [ "${ADOPTED:-0}" -ge 3 ]; then
+  pass "$ADOPTED probe processes adopted into the cgroup"
 else
-  fail "probe not adopted"
+  fail "only ${ADOPTED:-0} probe process(es) adopted, expected 3"
 fi
 if iptables -t mangle -C OUTPUT -m cgroup --path "nimbus.apps" -j MARK --set-mark 0x4e4d 2>/dev/null; then
   pass "mark rule installed"
@@ -142,7 +150,7 @@ if ip route show table 100 | grep -q .; then
 if [ -d /sys/fs/cgroup/nimbus.apps ]; then
   fail "cgroup still present"; else pass "cgroup removed"; fi
 
-kill "$PROBE_PID" 2>/dev/null
+pkill -u "$USER_UID" -f "$PROBE" 2>/dev/null
 sleep 0.3
 nft delete table inet nimbus_check 2>/dev/null
 

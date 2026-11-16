@@ -51,7 +51,10 @@ install -o root -g root -m 0755 "$BUILT" "$BINARY"
 install -o root -g root -m 0644 "$ROOT/src-tauri/helper/$UNIT" "$UNIT_PATH"
 
 systemctl daemon-reload
-systemctl enable --now "$UNIT"
+systemctl enable "$UNIT"
+# `enable --now` does not restart an already-running unit, so an upgrade would
+# keep executing the previous binary until the next reboot.
+systemctl restart "$UNIT"
 sleep 1
 
 echo

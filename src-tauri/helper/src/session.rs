@@ -118,13 +118,38 @@ pub fn adopt_matching(apps: &[String], owner: Option<u32>) -> Result<usize, Stri
     if moved == 0 {
         return Ok(0);
     }
+    // One `write()` per PID. `cgroup.procs` accepts exactly one PID per write;
+    // a buffer holding several returns EINVAL and moves nothing. Measured on
+    // kernel 7.3.4: 27 PIDs in one write failed, the same 27 one at a time all
+    // succeeded.
     let mut file = fs::OpenOptions::new()
         .write(true)
         .open(cgroup_procs())
         .map_err(|e| format!("could not open {}: {e}", cgroup_procs().display()))?;
-    file.write_all(buffer.as_bytes())
-        .map_err(|e| format!("could not move processes into the cgroup: {e}"))?;
-    Ok(moved)
+    let mut adopted = 0;
+    let mut failures: Vec<(i32, std::io::Error)> = Vec::new();
+    for pid in buffer.lines() {
+        match file.write_all(format!("{pid}\n").as_bytes()) {
+            Ok(()) => adopted += 1,
+            // The process exited between the /proc scan and this write, which
+            // is ordinary and not an error.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => failures.push((pid.parse().unwrap_or(-1), e)),
+        }
+    }
+    // A process we cannot move stays outside the VPN while the user believes it
+    // is inside. Fail loudly instead of silently under-enforcing.
+    if let Some((pid, error)) = failures.first() {
+        let more = if failures.len() > 1 {
+            format!(" (and {} more)", failures.len() - 1)
+        } else {
+            String::new()
+        };
+        return Err(format!(
+            "could not move process {pid} into the cgroup: {error}{more}"
+        ));
+    }
+    Ok(adopted)
 }
 
 /// Move every process back to the root cgroup so the directory can be removed.
@@ -165,6 +190,32 @@ fn reset_state() {
     release_all();
 }
 
+/// Routes, policy rule, mark, then adoption. Split out of [`Session::begin`] so
+/// a failure anywhere in the sequence can undo the whole thing.
+fn install(tunnel: &str, app_ids: &[String], owner: Option<u32>) -> Result<(), String> {
+    // Routes first: the policy rule is only installed once table 100 has
+    // something in it, so a marked packet is never looked up in an empty table.
+    let main_routes = exec::ip(&["-4".into(), "route".into(), "show".into()])?;
+    for route in plan::copied_routes(tunnel, &main_routes) {
+        exec::ip(&route)?;
+    }
+    exec::ip(&plan::default_route(tunnel))?;
+    exec::ip(&plan::rule_add())?;
+
+    // Only now start marking, and with iptables: its MARK target reroutes the
+    // packet, while an nftables `meta mark set` in OUTPUT runs after the route
+    // lookup and would let the packet leave unsteered.
+    exec::ensure_rule("iptables", &plan::mark_rule(), &plan::mark_rule_check())?;
+    exec::ensure_rule(
+        "ip6tables",
+        &plan::v6_drop_rule(),
+        &plan::v6_drop_rule_check(),
+    )?;
+
+    adopt_matching(app_ids, owner)?;
+    Ok(())
+}
+
 impl Session {
     /// Whether the tunnel device is still there. The daemon polls this so a
     /// dropped VPN cannot leave a mark pointing at a device that has gone.
@@ -190,31 +241,13 @@ impl Session {
         reset_state();
         ensure_cgroup()?;
 
-        // Routes first: the policy rule is only installed once table 100 has
-        // something in it, so a marked packet is never looked up in an empty
-        // table.
-        let main_routes = exec::ip(&["-4".into(), "route".into(), "show".into()])?;
-        for route in plan::copied_routes(tunnel, &main_routes) {
-            exec::ip(&route)?;
+        // Everything below installs state, so any failure has to undo it: a
+        // mark and a policy rule left behind would silently steer packets of
+        // whatever later enters the cgroup.
+        if let Err(error) = install(tunnel, app_ids, owner) {
+            reset_state();
+            return Err(error);
         }
-        exec::ip(&plan::default_route(tunnel))?;
-        exec::ip(&plan::rule_add())?;
-
-        // Only now start marking, and with iptables: its MARK target reroutes
-        // the packet, while an nftables `meta mark set` in OUTPUT runs after
-        // the route lookup and would let the packet leave unsteered.
-        exec::ensure_rule(
-            "iptables",
-            &plan::mark_rule(),
-            &plan::mark_rule_check(),
-        )?;
-        exec::ensure_rule(
-            "ip6tables",
-            &plan::v6_drop_rule(),
-            &plan::v6_drop_rule_check(),
-        )?;
-
-        adopt_matching(app_ids, owner)?;
 
         let stop = Arc::new(AtomicBool::new(false));
         let watcher = spawn_watcher(stop.clone(), app_ids.to_vec(), owner);

@@ -89,6 +89,11 @@ has to bind the tunnel device to reach it.
   reports `cgroup2fs`).
 - Selected processes are moved in by writing their PID to `cgroup.procs`.
   Children inherit the cgroup, so only the top-level process must be caught.
+- **One PID per `write()`.** `cgroup.procs` parses a single number, so a buffer
+  holding several PIDs fails with `EINVAL` and moves nothing (measured: 27 PIDs
+  in one write failed; the same 27 one at a time all succeeded). This only shows
+  up once an app has more than one process, which is why a single-process smoke
+  test missed it; `scripts/validate-app-split.sh` now adopts three.
 - Both firewall rules match the cgroup by path (`-m cgroup --path nimbus.apps`),
   which covers the whole subtree and does not depend on an inode that changes
   when the directory is re-created.
@@ -406,9 +411,20 @@ Measured caveat, recorded in §4.3: the same test fails with nftables
 `meta mark set` — 3 packets marked, 0 through the tunnel, 3 out of the physical
 interface. Only the xtables `MARK` target reroutes.
 
+Bugs the integration caught, both now fixed:
+
+- `cgroup.procs` was written with every PID in one buffer, so selecting a real
+  browser failed with "Invalid argument" and nothing was adopted. The first
+  dummy-device test only had one process and passed.
+- A failure after routes and marks were installed left them behind, because the
+  new session object was never created and so never torn down. `begin` now
+  undoes everything on any failure.
+- The installer used `systemctl enable --now`, which does not restart an
+  already-running unit, so upgrades kept executing the previous binary.
+
 Known gaps at this stage: DNS is not yet redirected (§4.4), the helper is not
-packaged into the deb/AppImage, and nothing has been exercised against a real
-Eddie session yet.
+packaged into the deb/AppImage (the install script is manual), and nothing has
+been exercised against a real Eddie session yet.
 
 ## 10. Open decisions
 

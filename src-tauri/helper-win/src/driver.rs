@@ -186,9 +186,13 @@ pub struct Session {
 /// with `{"images": ["\\Device\\...\\helium.exe"],
 ///        "tunnel_v4": "10.8.0.2", "internet_v4": "192.168.1.10"}`
 pub fn run_console_session(path: &str) -> Result<(), String> {
+    use crate::agent::System;
+
     #[derive(serde::Deserialize)]
     struct SessionFile {
-        images: Vec<String>,
+        /// Win32 executable paths to exclude, e.g. `C:\\Program Files\\x\\x.exe`.
+        apps: Vec<String>,
+        /// Optional overrides, so the integration can be tested without a tunnel.
         #[serde(default)]
         tunnel_v4: Option<String>,
         #[serde(default)]
@@ -200,16 +204,34 @@ pub fn run_console_session(path: &str) -> Result<(), String> {
     let file: SessionFile =
         serde_json::from_str(&text).map_err(|e| format!("could not parse {path}: {e}"))?;
 
+    let system = crate::windows_system::WindowsSystem::new();
+    let mut plan = crate::agent::plan(&system, &file.apps);
+    // Overrides exist for testing the driver without a live tunnel.
     let parse_v4 = |value: &Option<String>| -> Option<[u8; 4]> {
         let ip: std::net::Ipv4Addr = value.as_deref()?.parse().ok()?;
         Some(ip.octets())
     };
-    let addresses = proto::IpAddresses {
-        tunnel_v4: parse_v4(&file.tunnel_v4),
-        internet_v4: parse_v4(&file.internet_v4),
-        tunnel_v6: None,
-        internet_v6: None,
-    };
+    if let Some(v4) = parse_v4(&file.tunnel_v4) {
+        plan.addresses.tunnel_v4 = Some(v4);
+    }
+    if let Some(v4) = parse_v4(&file.internet_v4) {
+        plan.addresses.internet_v4 = Some(v4);
+    }
+
+    println!(
+        "plan: {} image(s), {} process(es), tunnel {:?}, internet {:?}",
+        plan.images.len(),
+        plan.tree.len(),
+        plan.addresses.tunnel_v4.map(std::net::Ipv4Addr::from),
+        plan.addresses.internet_v4.map(std::net::Ipv4Addr::from),
+    );
+    for image in &plan.images {
+        println!("  exclude {image}");
+    }
+    if !crate::agent::is_meaningful(&plan) {
+        eprintln!("warning: nothing matched, the driver would engage with an empty list");
+    }
+    let _ = system.addresses();
 
     let driver = Driver::open()?;
     println!("driver state: {:?}", driver.state()?);
@@ -222,10 +244,10 @@ pub fn run_console_session(path: &str) -> Result<(), String> {
         dns: *b"nimbus-split-dns",
     };
     driver.initialize(&sublayers)?;
-    driver.register_processes(&[])?;
-    driver.register_addresses(addresses)?;
-    driver.set_configuration(&file.images)?;
-    println!("engaged; excluding {} image(s)", file.images.len());
+    driver.register_processes(&plan.tree)?;
+    driver.register_addresses(plan.addresses)?;
+    driver.set_configuration(&plan.images)?;
+    println!("engaged; excluding {} image(s)", plan.images.len());
 
     loop {
         match driver.next_event()? {

@@ -43,6 +43,41 @@ impl WindowsSystem {
             drives: map_drives(),
         }
     }
+
+    /// Every running process as `(pid, win32 path)`.
+    ///
+    /// The picker needs the Win32 form (`C:\Program Files\...`), not the device
+    /// form the driver matches on, so this deliberately bypasses
+    /// `to_device_path`. Process ids repeat across images, and callers group by
+    /// path.
+    pub fn running_images(&self) -> Vec<(u32, String)> {
+        let mut images = Vec::new();
+        // SAFETY: TH32CS_SNAPPROCESS takes no additional arguments.
+        let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) };
+        if snapshot == INVALID_HANDLE_VALUE {
+            return images;
+        }
+
+        let mut entry: PROCESSENTRY32W = unsafe { std::mem::zeroed() };
+        entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+
+        // SAFETY: `entry` is initialised with the required size field.
+        let mut more = unsafe { Process32FirstW(snapshot, &mut entry) } != 0;
+        while more {
+            let pid = entry.th32ProcessID;
+            if pid > 0
+                && let Some(path) = process_image(pid)
+            {
+                images.push((pid, path));
+            }
+            // SAFETY: same buffer, advanced by the API.
+            more = unsafe { Process32NextW(snapshot, &mut entry) } != 0;
+        }
+
+        // SAFETY: the snapshot handle came from CreateToolhelp32Snapshot.
+        unsafe { CloseHandle(snapshot) };
+        images
+    }
 }
 
 impl Default for WindowsSystem {
@@ -51,8 +86,7 @@ impl Default for WindowsSystem {
     }
 }
 
-impl System for WindowsSystem {
-    fn to_device_path(&self, win32_path: &str) -> Option<String> {
+impl System for WindowsSystem {    fn to_device_path(&self, win32_path: &str) -> Option<String> {
         device_path(&self.drives, win32_path)
     }
 

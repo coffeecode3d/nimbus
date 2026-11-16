@@ -26,7 +26,7 @@ import type { AppSplitConfig, RunningApp } from "./appSplit";
 const SAMPLES = 56;
 const STATS_CALLBACK = "nimbus.stats";
 const SAVED_SERVER_KEY = "nimbus.server";
-import { IS_WINDOWS } from "./platform";
+import { APP_SPLIT_MODE, IS_WINDOWS } from "./platform";
 
 /** A remembered server is a deliberate choice, so it wins over latency auto-pick. */
 function savedServerId(servers: ServerInfo[]): string | null {
@@ -642,10 +642,11 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       }
       setError(null);
       setState("connected");
-      // Install the app policy once Eddie reports a live tunnel. With
-      // `network.ipv4.mode=out` nothing is inside the VPN until this succeeds,
-      // so a failure has to disconnect rather than leave the user believing a
-      // browser is protected when it is not.
+      // Install the app policy once Eddie reports a live tunnel. In include mode
+      // nothing is inside the VPN until this succeeds, so a failure has to
+      // disconnect rather than leave the user believing a browser is protected
+      // when it is not. In exclude mode the consequence is the opposite: the
+      // apps stay in the tunnel, which is safe, so report it instead.
       if (appSplitActive(appSplitRef.current) && !appSplitSent.current) {
         appSplitSent.current = true;
         const apps = appSplitRef.current.apps;
@@ -658,9 +659,11 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
             appSplitSent.current = false;
             setAppSplitApplied(null);
             setAppSplitError(String(err));
-            failClosed.current(
-              `App split tunneling could not start, so nothing would have used the VPN: ${err}`,
-            );
+            if (APP_SPLIT_MODE === "include") {
+              failClosed.current(
+                `App split tunneling could not start, so nothing would have used the VPN: ${err}`,
+              );
+            }
           });
       }
     } else if (action === "pending") {

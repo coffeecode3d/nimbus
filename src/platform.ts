@@ -1,21 +1,22 @@
 /**
  * Platform detection shared by the UI and the engine hooks.
  *
- * App split tunneling is implemented differently per platform:
- *  - Linux: a root service puts the selected apps in a cgroup and steers them
- *    into the tunnel with a firewall mark and a policy route.
- *  - Windows: not available yet. Doing the same thing needs a WFP kernel
- *    driver, and kernel drivers only load if they are signed by Microsoft,
- *    which requires an EV code-signing certificate. Shipping an unsigned
- *    driver would simply be ignored by the kernel on any machine with Secure
- *    Boot enabled.
+ * App split tunneling means different things per platform:
+ *  - Linux: *include* mode. A root service puts the selected apps in a cgroup
+ *    and steers them into the tunnel with a firewall mark and a policy route.
+ *    Eddie runs with `network.ipv4.mode=out`, so only those apps use the VPN.
+ *  - Windows: *exclude* mode. Per-application routing needs a kernel driver, and
+ *    Windows only loads drivers signed by Microsoft. Nimbus drives Mullvad's
+ *    signed GPL-3.0 driver instead, which can only push apps *out* of the
+ *    tunnel. Eddie stays in its normal `in` mode and the selected apps bypass
+ *    the VPN.
  *
- * Using one constant keeps the UI and the connect path in agreement: the
- * frontend must never ask Eddie for `network.ipv4.mode=out` on a platform where
- * the helper cannot put anything back into the tunnel.
+ * The two are opposite in wording and in what happens to everything else, so the
+ * UI has to say which one it is doing rather than reuse one sentence.
  */
+
 export const IS_WINDOWS =
   typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
 
-/** True when app split tunneling can be used on this platform at all. */
-export const APP_SPLIT_PLATFORM_SUPPORTED = !IS_WINDOWS;
+/** Which way round the selection works. */
+export const APP_SPLIT_MODE: "include" | "exclude" = IS_WINDOWS ? "exclude" : "include";

@@ -1,0 +1,17 @@
+@{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "build": {
+    "beforeBuildCommand": "pnpm build && cargo build --release -p nimbus-split-win --manifest-path src-tauri/Cargo.toml"
+  },
+  "bundle": {
+    "resources": {
+      "target/release/nimbus-split-win.exe": "nimbus-split-win.exe",
+      "driver/mullvad-split-tunnel.sys": "mullvad-split-tunnel.sys"
+    },
+    "windows": {
+      "nsis": {
+        "installerHooks": "nsis/hooks.nsh"
+      }
+    }
+  }
+}

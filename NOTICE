@@ -10,3 +10,15 @@ Nimbus is an unofficial client and is not affiliated with or endorsed by
 AirVPN. Eddie is Copyright (C) 2014-2026 AirVPN and is distributed under
 GPL-3.0. The official Eddie engine, helper and integrity checks are used
 unmodified.
+
+Windows split tunneling driver
+------------------------------
+The Windows build of Nimbus can use the split tunnel driver from the Mullvad
+VPN app, https://github.com/mullvad/win-split-tunnel, which is Copyright (C)
+Mullvad VPN AB and distributed under GPL-3.0. It is used unmodified and only as
+a separately installed driver; the source is available at the URL above, as
+GPL-3.0 requires. Nimbus is not affiliated with or endorsed by Mullvad.
+
+Nimbus never writes or signs its own kernel driver: Windows only loads drivers
+signed by Microsoft, so reusing an existing signed GPL driver is the only way to
+offer per-application exclusion without an EV code-signing certificate.

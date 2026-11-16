@@ -36,5 +36,5 @@ tauri-plugin-process = "2"
 # The privileged per-app split tunneling helper lives in the same workspace so a
 # single `cargo build` produces both binaries and they share a lockfile.
 [workspace]
-members = ["helper"]
+members = ["helper", "helper-win"]
 resolver = "3"

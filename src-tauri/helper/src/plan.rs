@@ -217,6 +217,51 @@ pub fn default_route(tunnel: &str) -> Vec<String> {
     ]
 }
 
+/// Routes that must stay outside [`TABLE`] even when marked.
+///
+/// WireGuard's encapsulated packets carry the inner packet's mark, so without
+/// this the route to the tunnel's own endpoint matches table 100's default
+/// (`dev Eddie`) and the tunnel feeds itself. Measured: a 64k packets/second
+/// loop on the interface and no replies at all, because the payload never left
+/// the machine.
+///
+/// Eddie adds a host route for the endpoint via the physical gateway, so host
+/// routes that do not point at the tunnel are copied into table 100 as they are.
+pub fn bypass_routes(tunnel: &str, main_routes: &str) -> Vec<Vec<String>> {
+    let mut out = Vec::new();
+    for line in main_routes.lines() {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        let Some(dest) = fields.first() else { continue };
+        if *dest == "default" || !is_plain_destination(dest) {
+            continue;
+        }
+        // Host route only: `/32`, or a bare address (which is /32).
+        let prefix = dest.split('/').nth(1).and_then(|p| p.parse::<u8>().ok());
+        if prefix.is_some_and(|p| p != 32) {
+            continue;
+        }
+        let Some(dev) = fields.iter().skip_while(|f| **f != "dev").nth(1) else {
+            continue;
+        };
+        if *dev == tunnel {
+            continue;
+        }
+        let via = fields.iter().skip_while(|f| **f != "via").nth(1);
+
+        let mut args: Vec<String> = vec!["route".into(), "add".into(), dest.to_string()];
+        if let Some(via) = via {
+            args.push("via".into());
+            args.push((*via).to_string());
+        }
+        args.push("dev".into());
+        args.push((*dev).to_string());
+        args.push("table".into());
+        args.push(TABLE.to_string());
+        out.push(args);
+    }
+    out
+}
+
 /// Destinations worth copying from the tunnel's main-table routes into
 /// [`TABLE`].
 ///
@@ -375,6 +420,35 @@ default via 192.168.4.1 dev enp42s0 proto dhcp metric 100
                 "route add 198.44.129.2 dev Eddie table 100",
             ]
         );
+    }
+
+    #[test]
+    fn tunnel_endpoint_is_kept_out_of_the_tunnel() {
+        let main = "\
+default via 192.168.4.1 dev enp42s0 proto dhcp src 192.168.6.124 metric 100
+192.168.4.0/22 dev enp42s0 proto kernel scope link src 192.168.6.124
+198.44.133.70 via 192.168.4.1 dev enp42s0
+198.44.133.101 dev Eddie scope link";
+        let bypass: Vec<String> = bypass_routes("Eddie", main)
+            .into_iter()
+            .map(|a| a.join(" "))
+            .collect();
+        // Only the endpoint host route: not the default, not the LAN, and not
+        // the exit route that intentionally lives on the tunnel.
+        assert_eq!(
+            bypass,
+            vec!["route add 198.44.133.70 via 192.168.4.1 dev enp42s0 table 100"]
+        );
+    }
+
+    #[test]
+    fn bypass_ignores_on_link_host_routes_without_a_gateway() {
+        let main = "198.18.0.9 dev enp42s0 scope link";
+        let bypass: Vec<String> = bypass_routes("Eddie", main)
+            .into_iter()
+            .map(|a| a.join(" "))
+            .collect();
+        assert_eq!(bypass, vec!["route add 198.18.0.9 dev enp42s0 table 100"]);
     }
 
     #[test]

@@ -134,6 +134,20 @@ postrouting, mark + tunnel dev  packets 0
 postrouting, mark + physical    packets 3      ← packets leaked
 ```
 
+**The tunnel must not route its own transport.** WireGuard's encapsulated
+packets carry the inner packet's mark, so the route to the tunnel's own
+endpoint (`198.44.133.70`, added by Eddie via the physical gateway) matched
+table 100's `default dev Eddie` and the tunnel fed itself:
+
+```
+Eddie TX while idle: 192,358 packets in 3 seconds (64k pps), RX: 0
+```
+
+Nothing ever reached the exit, so every connection hung with no reply. Copying
+the endpoint's host route into table 100 — `198.44.133.70 via <lan gateway> dev
+<physical>` — drops that to **0 packets per 3 seconds** and traffic flows.
+`plan::bypass_routes` copies every host route that does not point at the tunnel.
+
 **The source address is the second half of it.** A local socket chooses its
 source when it resolves the route, which happens *before* any packet exists and
 therefore before the OUTPUT hook can mark it. The reroute to the tunnel keeps

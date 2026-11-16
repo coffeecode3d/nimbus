@@ -198,6 +198,11 @@ fn install(tunnel: &str, app_ids: &[String], owner: Option<u32>) -> Result<(), S
     // Routes first: the policy rule is only installed once table 100 has
     // something in it, so a marked packet is never looked up in an empty table.
     let main_routes = exec::ip(&["-4".into(), "route".into(), "show".into()])?;
+    // Keep the tunnel's own endpoint outside the tunnel first: the moment the
+    // default route below exists, a marked packet to the endpoint would loop.
+    for route in plan::bypass_routes(tunnel, &main_routes) {
+        exec::ip(&route)?;
+    }
     for route in plan::copied_routes(tunnel, &main_routes) {
         exec::ip(&route)?;
     }

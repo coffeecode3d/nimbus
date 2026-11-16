@@ -28,6 +28,7 @@ PROBE=$WORK/nimbus-probe
 LOG=$WORK/check.log
 DEV=nimbus-test0
 PHYS=$(ip route show default | awk '{print $5}' | head -1)
+GATEWAY=$(ip route show default | awk '{print $3}' | head -1)
 USER_UID=${SUDO_UID:-$(id -u)}
 USER_NAME=$(id -nu "$USER_UID")
 
@@ -49,6 +50,12 @@ if [ "$(id -u)" -ne 0 ]; then
   echo "run as root: sudo $0" >&2
   exit 2
 fi
+if "$HELPER" status --json 2>/dev/null | grep -q '"cgroup": true'; then
+  echo "A split tunneling session is already active." >&2
+  echo "Disconnect it in Nimbus (or stop nimbus-helper) before running this check." >&2
+  exit 2
+fi
+
 if [ ! -x "$HELPER" ]; then
   echo "helper not built: $HELPER" >&2
   echo "  cargo build -p nimbus-helper --manifest-path src-tauri/Cargo.toml" >&2
@@ -74,6 +81,13 @@ sysctl -q -w "net.ipv6.conf.$DEV.disable_ipv6=1"
 ip link set "$DEV" up
 ip addr add 10.99.0.1/24 dev "$DEV"
 ip -br addr show "$DEV" | tee -a "$LOG"
+
+# Eddie adds a host route for the tunnel's own endpoint via the physical
+# gateway. WireGuard's encapsulated packets carry the inner mark, so that route
+# must be copied into table 100 or the tunnel feeds itself in a loop. Stand one
+# in for it with an unroutable TEST-NET address.
+ENDPOINT=203.0.113.99
+ip route add "$ENDPOINT/32" via "$GATEWAY" dev "$PHYS" 2>/dev/null
 
 # ── phase 1: policy installed ─────────────────────────────────────────────
 say "== phase 1: probes as $USER_NAME with the policy active"
@@ -104,6 +118,12 @@ if iptables -t mangle -C OUTPUT -m cgroup --path "nimbus.apps" -j MARK --set-mar
   pass "mark rule installed"
 else
   fail "mark rule missing"
+fi
+
+if ip route show table 100 | grep -q "^$ENDPOINT "; then
+  pass "tunnel endpoint kept outside the tunnel in table 100"
+else
+  fail "endpoint route missing from table 100 (the tunnel would feed itself)"
 fi
 
 say "== postrouting counters"

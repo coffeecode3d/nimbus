@@ -11,6 +11,7 @@
 //!
 //! [`mullvad/win-split-tunnel`]: https://github.com/mullvad/win-split-tunnel
 
+pub mod agent;
 pub mod proto;
 
 #[cfg(windows)]

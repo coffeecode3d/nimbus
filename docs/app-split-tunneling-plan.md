@@ -260,7 +260,44 @@ Same plumbing, opposite policy, and no DNS work:
 - Excluded apps still use Eddie's resolver, so a hostname can resolve to an
   address that is not excluded. Document that limitation.
 
-## 5. Windows design
+## 5. Windows design (chosen: exclude mode on Mullvad's driver)
+
+Include-mode parity on Windows is not shippable for free: it needs a WFP kernel
+driver, and Windows only loads drivers signed by Microsoft (EV certificate,
+verified business, and an HSM/token for every signing session). Test-signing and
+disabling Secure Boot are not options we can ask of users.
+
+So Windows gets **exclude mode** instead, which is the direction Mullvad's
+already-signed GPL-3.0 driver implements: Eddie stays in its normal `in` mode and
+the selected apps are pushed out of the tunnel.
+
+Crate `src-tauri/helper-win` (`nimbus-split-win`):
+
+- `proto` — the driver's wire format, transcribed from `defs/*.h`: IOCTL codes,
+  `ST_IP_ADDRESSES`, the configuration and process-discovery blocks with
+  UTF-16 image paths, event decoding, and the documented state machine. Pure
+  encoding, unit-tested on any platform (9 tests).
+- `agent` — the decision layer: selected Win32 paths → device paths the driver
+  matches on, plus the process tree and addresses to register. The OS is behind
+  a `System` trait, so the flow is tested with a fake (5 tests).
+- `driver` — opens `\\.\MULLVADSPLITTUNNEL`, walks
+  `STARTED → INITIALIZED → READY → ENGAGED`, drains events. Type-checked
+  against `x86_64-pc-windows-gnu`; not yet exercised on Windows.
+
+Remaining before it ships:
+
+1. Vendor the signed `mullvad-split-tunnel.sys` (from their installer) and
+   install it from NSIS, with the GPL-3.0 attribution already in `NOTICE`.
+2. Implement `System` with Windows APIs: `QueryDosDeviceW` for device paths,
+   `CreateToolhelp32Snapshot`/`QueryFullProcessImageNameW` for the tree,
+   `GetAdaptersAddresses` for the tunnel and physical addresses.
+3. Wrap the agent in a Windows service with a named-pipe API, so the
+   unprivileged UI can send the exclude list.
+4. UI: an exclude-mode toggle on the Apps page for Windows.
+5. Test on a real Windows machine — none of the above can be validated from the
+   development host used so far.
+
+## 5a. Windows design (original notes)
 
 ### 5.1 Why user mode is not enough
 

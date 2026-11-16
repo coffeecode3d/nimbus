@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import type { Engine } from "../engine";
 import { Button, Field, Section, Toggle } from "../components";
 import { Apps as AppsIcon, X } from "../icons";
+import { APP_SPLIT_PLATFORM_SUPPORTED } from "../platform";
 
 /**
  * App split tunneling, as a first-class page rather than a Settings subsection.
@@ -58,11 +59,13 @@ export function AppsScreen({
         </div>
         <div className="apps-status">
           <span className={`apps-dot${activeCount > 0 ? " is-live" : ""}`} />
-          {activeCount > 0
-            ? `${activeCount} app${activeCount === 1 ? "" : "s"} in the tunnel`
-            : engine.connected
-              ? "Tunnel up, no app policy"
-              : "Not connected"}
+          {!APP_SPLIT_PLATFORM_SUPPORTED
+            ? "Not available on Windows"
+            : activeCount > 0
+              ? `${activeCount} app${activeCount === 1 ? "" : "s"} in the tunnel`
+              : engine.connected
+                ? "Tunnel up, no app policy"
+                : "Not connected"}
         </div>
       </header>
 
@@ -71,21 +74,31 @@ export function AppsScreen({
           title="App split tunneling"
           note="Linux only for now. A small root service installs a cgroup, a firewall mark and a policy route; Nimbus itself never runs as root, and it can only ever steer your own processes."
         >
-          <Field
-            title="Only selected apps use the VPN"
-            desc="Pick one or several running apps. Everything else stays outside the tunnel."
-          >
-            <Toggle
-              label="App split tunneling"
-              checked={split.enabled}
-              onChange={(enabled) => engine.setAppSplit({ ...split, enabled })}
-            />
-          </Field>
-
-          {!engine.appSplitAvailable && (
+          {APP_SPLIT_PLATFORM_SUPPORTED ? (
+            <Field
+              title="Only selected apps use the VPN"
+              desc="Pick one or several running apps. Everything else stays outside the tunnel."
+            >
+              <Toggle
+                label="App split tunneling"
+                checked={split.enabled}
+                onChange={(enabled) => engine.setAppSplit({ ...split, enabled })}
+              />
+            </Field>
+          ) : (
             <p className="split-warning" role="status">
-              The helper service is not installed, so this cannot be turned on yet. Install it once
-              with <code>sudo scripts/install-helper.sh</code> from the Nimbus source checkout.
+              <strong>Not available on Windows yet.</strong> Steering individual applications on
+              Windows needs a kernel-mode network filter driver, and Windows only loads drivers
+              signed by Microsoft, which requires an EV code-signing certificate. On Windows,
+              Nimbus protects everything or nothing. An exclude-mode option is planned.
+            </p>
+          )}
+
+          {APP_SPLIT_PLATFORM_SUPPORTED && !engine.appSplitAvailable && (
+            <p className="split-warning" role="status">
+              The helper service is not installed. Install Nimbus from the .deb package (which
+              sets it up), or run <code>sudo scripts/install-helper.sh</code> once from the source
+              checkout.
             </p>
           )}
 
@@ -189,39 +202,65 @@ export function AppsScreen({
 
         <Section
           title="How it works"
-          note="Worth knowing before you rely on it."
+          note={
+            APP_SPLIT_PLATFORM_SUPPORTED
+              ? "Worth knowing before you rely on it."
+              : "Why Windows is different."
+          }
         >
-          <ul className="apps-notes">
-            <li>
-              Only <strong>running</strong> apps are listed. Open Helium first, then pick it.
-            </li>
-            <li>
-              Connections that existed before the policy was installed stay where they were, so
-              restart or reload the app after enabling this.
-            </li>
-            <li>
-              The tunnel carries only the selected apps. If the policy cannot be installed, Nimbus
-              disconnects instead of leaving everything outside the VPN.
-            </li>
-            <li>
-              Destination exclusions (Settings → Split tunneling) and app selection are mutually
-              exclusive: choose one or the other.
-            </li>
-          </ul>
-          <div className="apps-links">
-            <Button variant="quiet" onClick={() => void refreshApps()}>
-              Re-scan running apps
-            </Button>
-            <Button
-              variant="quiet"
-              onClick={() => {
-                engine.setAppSplit({ enabled: false, apps: split.apps });
-                notify("App split tunneling turned off for the next connection");
-              }}
-            >
-              Turn off
-            </Button>
-          </div>
+          {!APP_SPLIT_PLATFORM_SUPPORTED && (
+            <ul className="apps-notes">
+              <li>
+                Windows routes by destination, not by process. Choosing apps needs a driver that
+                binds their sockets to the tunnel adapter, and that driver must be signed by
+                Microsoft before Windows will load it.
+              </li>
+              <li>
+                Signing requires an EV code-signing certificate issued to a verified business, so
+                it is a procurement step rather than a code change.
+              </li>
+              <li>
+                Until then, everything on Windows goes through the VPN or nothing does. The
+                destination-based exclusions in Settings → Split tunneling work on both platforms.
+              </li>
+            </ul>
+          )}
+
+          {APP_SPLIT_PLATFORM_SUPPORTED && (
+            <>
+              <ul className="apps-notes">
+                <li>
+                  Only <strong>running</strong> apps are listed. Open Helium first, then pick it.
+                </li>
+                <li>
+                  Connections that existed before the policy was installed stay where they were,
+                  so restart or reload the app after enabling this.
+                </li>
+                <li>
+                  The tunnel carries only the selected apps. If the policy cannot be installed,
+                  Nimbus disconnects instead of leaving everything outside the VPN.
+                </li>
+                <li>
+                  Destination exclusions (Settings → Split tunneling) and app selection are
+                  mutually exclusive: choose one or the other.
+                </li>
+              </ul>
+              <div className="apps-links">
+                <Button variant="quiet" onClick={() => void refreshApps()}>
+                  Re-scan running apps
+                </Button>
+                <Button
+                  variant="quiet"
+                  onClick={() => {
+                    engine.setAppSplit({ enabled: false, apps: split.apps });
+                    notify("App split tunneling turned off for the next connection");
+                  }}
+                >
+                  Turn off
+                </Button>
+              </div>
+            </>
+          )}
         </Section>
       </div>
     </div>

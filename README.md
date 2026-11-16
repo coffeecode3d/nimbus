@@ -75,7 +75,7 @@ pnpm tauri build --bundles deb,appimage
 Outputs:
 
 ```
-src-tauri/target/release/bundle/deb/Nimbus_0.1.8_amd64.deb
+src-tauri/target/release/bundle/deb/Nimbus_0.2.0_amd64.deb
 src-tauri/target/release/bundle/appimage/Nimbus_0.1.8_amd64.AppImage
 ```
 
@@ -90,7 +90,7 @@ Output: `src-tauri\target\release\bundle\nsis\Nimbus_0.1.8_x64-setup.exe`.
 CI builds both platforms with `.github/workflows/build.yml` (artifacts) and
 publishes signed releases from `v*` tags with `.github/workflows/release.yml`.
 
-Install the deb with `sudo apt install ./Nimbus_0.1.8_amd64.deb`, or mark the
+Install the deb with `sudo apt install ./Nimbus_0.2.0_amd64.deb`, or mark the
 AppImage executable and run it (FUSE, or `--appimage-extract-and-run`, required).
 Neither package bundles Eddie. On first launch, if `eddie-cli` is missing,
 Nimbus shows a **one-time engine setup** screen:
@@ -347,9 +347,10 @@ inline script, so there is no flash of the wrong theme on launch.
 13. **Per-app split tunneling (Linux)** — Settings → App split tunneling runs
     only the selected apps inside the VPN, through a small root helper
     (`nimbus-helper`) that owns a cgroup, a firewall mark and a policy route.
-    Needs one install step: `sudo scripts/install-helper.sh`. DNS for the
-    selected apps is not redirected yet, and Windows still needs a signed WFP
-    driver or an upstream Eddie option.
+    The .deb installs and starts the helper; from a source checkout use
+    `sudo scripts/install-helper.sh`. DNS is forced through the tunnel too.
+    Windows is disabled in the UI: per-app routing there needs a kernel driver
+    signed by Microsoft, which requires an EV code-signing certificate.
 
 ### Windows and split tunnelling
 

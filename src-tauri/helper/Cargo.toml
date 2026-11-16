@@ -1,6 +1,6 @@
 [package]
 name = "nimbus-helper"
-version = "0.1.8"
+version = "0.2.0"
 description = "Privileged per-app split tunneling helper for Nimbus"
 authors = ["Nimbus contributors"]
 license = "GPL-3.0-or-later"

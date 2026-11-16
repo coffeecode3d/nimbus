@@ -10,8 +10,15 @@ Decisions so far:
 - Eddie `network.ipv4.mode=out` is **validated on Linux** for WireGuard and
   OpenVPN (9/9 checks, see §9.1), with two prerequisites: `dns.check=false` and
   `dns.mode=none`.
-- Windows general per-app inclusion stays out of scope until a signed WFP
-  driver or an upstream Eddie option exists.
+- Windows: **no free path exists**, so 0.2.0 hides the feature there. Per-app
+  include needs a WFP kernel driver, and Windows only loads drivers signed by
+  Microsoft (EV certificate, verified business, ~$300-500/year). Test-signing
+  and disabling Secure Boot are not shippable. Mullvad's driver cannot be reused
+  for include mode: it is explicitly exclude-only ("redirect socket binds away
+  from the tunnel interface"), and it demands a private IOCTL protocol plus its
+  own WFP filters. The next Windows step is an **exclude** feature, which also
+  needs a driver — the only free route is reusing Mullvad's signed GPL driver,
+  at the cost of depending on their binary and untested IOCTL coupling.
 
 ## 1. Goal
 

@@ -2,6 +2,7 @@ import type { Engine } from "../engine";
 import { formatDuration, formatRate } from "../engine";
 import { Button, LoadBar, Sparkline, Toggle, Spinner } from "../components";
 import { ArrowDown, ArrowUp, ChevronRight, Clock, Copy, Power, Shield } from "../icons";
+import { IS_WINDOWS } from "../platform";
 
 const COPY: Record<
   Engine["state"],
@@ -62,8 +63,9 @@ export function ConnectScreen({
     : 0;
   // App include mode inverts the question: the tunnel carries *only* these
   // apps, so "protected" applies to them and not to the rest of the desktop.
-  const appliedApps = engine.appSplitApplied ?? [];
-  const selectedApps = engine.appSplit.enabled ? engine.appSplit.apps : [];
+  const appliedApps = !IS_WINDOWS ? (engine.appSplitApplied ?? []) : [];
+  const selectedApps =
+    !IS_WINDOWS && engine.appSplit.enabled ? engine.appSplit.apps : [];
   const plural = (n: number) => (n === 1 ? "" : "s");
   const appSub =
     state === "connected" && appliedApps.length > 0

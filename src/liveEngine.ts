@@ -26,8 +26,7 @@ import type { AppSplitConfig, RunningApp } from "./appSplit";
 const SAMPLES = 56;
 const STATS_CALLBACK = "nimbus.stats";
 const SAVED_SERVER_KEY = "nimbus.server";
-const IS_WINDOWS =
-  typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
+import { IS_WINDOWS } from "./platform";
 
 /** A remembered server is a deliberate choice, so it wins over latency auto-pick. */
 function savedServerId(servers: ServerInfo[]): string | null {
@@ -543,7 +542,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       // App include mode needs Eddie to leave the system default route outside
       // the tunnel, so it and destination exclusions are mutually exclusive:
       // an `out` route only means anything when the tunnel *is* the default.
-      const includeApps = appSplitActive(appSplitRef.current);
+      // Never ask for include mode where the helper cannot deliver it: with
+      // `network.ipv4.mode=out` on Windows nothing would be inside the VPN.
+      const includeApps = appSplitActive(appSplitRef.current) && !IS_WINDOWS;
       // Always send the value, even when split tunneling is off: Eddie treats
       // an empty `routes.custom` as an override and drops stale profile rules.
       const routesCustom = includeApps

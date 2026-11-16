@@ -84,7 +84,7 @@ function friendlyError(err: unknown): string {
  * tunnel is up.
  */
 export function useUpdates(enabled: boolean): UpdatesApi {
-  const [currentVersion, setCurrentVersion] = useState("0.1.8");
+  const [currentVersion, setCurrentVersion] = useState("0.2.0");
   const [bundleKind, setBundleKind] = useState<BundleType | "development">("development");
   const [autoCheck, setAutoCheckState] = useState(readAutoCheck);
   const [checking, setChecking] = useState(false);

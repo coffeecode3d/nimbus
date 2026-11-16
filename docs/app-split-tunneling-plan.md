@@ -290,6 +290,30 @@ Crate `src-tauri/helper-win` (`nimbus-split-win`):
   `STARTED → INITIALIZED → READY → ENGAGED`, drains events. Type-checked
   against `x86_64-pc-windows-gnu`; not yet exercised on Windows.
 
+The wire format was checked against the upstream headers rather than only
+against our own unit tests, because a wrong size would fail on the machine and
+nowhere else:
+
+- `ST_IP_ADDRESSES` is four unpadded addresses — `IN_ADDR`, `IN_ADDR`,
+  `IN6_ADDR`, `IN6_ADDR` — 40 bytes in that order.
+- `ST_CONFIGURATION_ENTRY` is 16 bytes and `ST_PROCESS_DISCOVERY_ENTRY` is 32 on
+  x64, both with six bytes of tail padding after the `USHORT` length; the
+  offsets in those entries are relative to the string blob that follows the
+  whole entry array, not to the start of the buffer.
+- `ST_EVENT_HEADER` has a four-byte `EventId`, four bytes of padding, then a
+  `SIZE_T` size; the payload starts at byte 16. The error event ids really are
+  `0x80000000 + n`, so the field is unsigned.
+- The driver rejects a buffer whose `TotalLength` is not exactly the buffer
+  length, and requires the IP address buffer to be exactly 40 bytes.
+- `IOCTL_ST_REGISTER_IP_ADDRESSES` is only accepted in the `READY` state, so the
+  order is fixed: initialize, register the process tree, register addresses,
+  then set the configuration.
+- `IOCTL_ST_GET_STATE` requires an 8-byte output buffer even though the state
+  itself is a 32-bit value.
+
+The driver's own "valid address" test is merely "not all zero", so the agent can
+still be exercised without a live tunnel by passing explicit addresses.
+
 Remaining before it ships:
 
 1. Vendor the signed `mullvad-split-tunnel.sys` (from their installer) and

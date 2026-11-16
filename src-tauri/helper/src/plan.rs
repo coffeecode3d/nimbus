@@ -54,6 +54,29 @@ pub const TABLE: u32 = 100;
 /// consulted first, and below the `local` rule at 0 so loopback still wins.
 pub const RULE_PREF: u32 = 1000;
 
+/// Source-NAT marked packets to the address of the device they leave through.
+///
+/// Without this, an included app keeps the source address the kernel chose
+/// *before* the mark existed (its LAN address), and the VPN exit drops the
+/// packet. Measured: a marked probe left the tunnel device as
+/// `SRC=192.168.6.124`, and conntrack expected the reply at the LAN address
+/// instead of the tunnel one.
+///
+/// No `-o` device is given on purpose: marked packets only ever leave through
+/// the tunnel (table [`TABLE`] has no other default), and leaving it out lets
+/// teardown remove the rule without knowing the tunnel name.
+pub fn masquerade_rule() -> Vec<String> {
+    nat_rule(Op::Add)
+}
+
+pub fn masquerade_rule_check() -> Vec<String> {
+    nat_rule(Op::Check)
+}
+
+pub fn masquerade_rule_delete() -> Vec<String> {
+    nat_rule(Op::Delete)
+}
+
 /// Program and arguments for the IPv4 mark rule.
 pub fn mark_rule() -> Vec<String> {
     rule("iptables", Op::Add)
@@ -110,6 +133,21 @@ fn rule(_program: &str, op: Op) -> Vec<String> {
         "MARK".into(),
         "--set-mark".into(),
         format!("0x{MARK:x}"),
+    ]
+}
+
+fn nat_rule(op: Op) -> Vec<String> {
+    vec![
+        "-t".into(),
+        "nat".into(),
+        op.flag().into(),
+        "POSTROUTING".into(),
+        "-m".into(),
+        "mark".into(),
+        "--mark".into(),
+        format!("0x{MARK:x}"),
+        "-j".into(),
+        "MASQUERADE".into(),
     ]
 }
 
@@ -252,6 +290,21 @@ mod tests {
             mark_rule_delete().join(" "),
             "-t mangle -D OUTPUT -m cgroup --path nimbus.apps -j MARK --set-mark 0x4e4d"
         );
+    }
+
+    #[test]
+    fn marked_traffic_is_source_natted() {
+        assert_eq!(
+            masquerade_rule().join(" "),
+            "-t nat -A POSTROUTING -m mark --mark 0x4e4d -j MASQUERADE"
+        );
+        assert_eq!(
+            masquerade_rule_delete().join(" "),
+            "-t nat -D POSTROUTING -m mark --mark 0x4e4d -j MASQUERADE"
+        );
+        // No `-o`: teardown must not depend on knowing the tunnel device.
+        assert!(!masquerade_rule().iter().any(|a| a == "-o"));
+        assert!(masquerade_rule_check().iter().any(|a| a == "-C"));
     }
 
     #[test]

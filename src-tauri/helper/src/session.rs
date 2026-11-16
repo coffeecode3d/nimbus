@@ -185,6 +185,8 @@ fn ensure_cgroup() -> Result<(), String> {
 fn reset_state() {
     exec::remove_rule("iptables", &plan::mark_rule_delete());
     exec::remove_rule("ip6tables", &plan::v6_drop_rule_delete());
+    exec::remove_rule("iptables", &plan::masquerade_rule_delete());
+    exec::remove_rule("iptables", &plan::masquerade_rule_delete());
     exec::run_ignore("ip", &plan::table_flush());
     exec::run_ignore("ip", &plan::rule_del());
     release_all();
@@ -210,6 +212,16 @@ fn install(tunnel: &str, app_ids: &[String], owner: Option<u32>) -> Result<(), S
         "ip6tables",
         &plan::v6_drop_rule(),
         &plan::v6_drop_rule_check(),
+    )?;
+
+    // The kernel picked each socket's source address during the route lookup
+    // that happened before this mark existed, so it is still the LAN address.
+    // Rewrite it to the tunnel address on the way out, or the VPN exit drops
+    // every packet from an included app.
+    exec::ensure_rule(
+        "iptables",
+        &plan::masquerade_rule(),
+        &plan::masquerade_rule_check(),
     )?;
 
     adopt_matching(app_ids, owner)?;

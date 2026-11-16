@@ -134,6 +134,21 @@ else
   fail "${VIA_PHYS} marked datagram(s) leaked out of the physical interface"
 fi
 
+# The source address is chosen before the mark exists, so without the NAT rule
+# the packet leaves the tunnel claiming to come from the LAN address and the VPN
+# exit drops it. Conntrack shows the rewritten source as the reply destination.
+say "-- conntrack entries for the probe destination:"
+CONN=$(grep "dst=1.0.0.1" /proc/net/nf_conntrack 2>/dev/null | grep "dport=53" || true)
+echo "${CONN:-(none)}" | tee -a "$LOG"
+# Check "any entry", not the first: entries from earlier runs can still be in
+# the table (UDP conntrack entries outlive the test), and they may predate the
+# NAT rule.
+if echo "$CONN" | grep -q "dst=10.99.0.1"; then
+  pass "source rewritten to the tunnel device address"
+else
+  fail "source address was not rewritten to the tunnel device"
+fi
+
 say "== stop helper"
 kill -TERM "$ENFORCE_PID" 2>/dev/null
 wait "$ENFORCE_PID" 2>/dev/null

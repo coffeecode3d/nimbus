@@ -134,6 +134,26 @@ postrouting, mark + tunnel dev  packets 0
 postrouting, mark + physical    packets 3      ← packets leaked
 ```
 
+**The source address is the second half of it.** A local socket chooses its
+source when it resolves the route, which happens *before* any packet exists and
+therefore before the OUTPUT hook can mark it. The reroute to the tunnel keeps
+that choice, so an included app sends packets that claim to come from the LAN:
+
+```
+OUT=nimbus-src0  SRC=192.168.6.124  DST=203.0.113.5  MARK=0x5151
+conntrack: src=192.168.6.124 ... [UNREPLIED] src=203.0.113.5 dst=192.168.6.124
+```
+
+The AirVPN exit drops those packets — the app shows "connected" but nothing
+loads. Rewriting the source on the way out fixes it:
+
+```
+iptables -t nat -A POSTROUTING -m mark --mark 0x4e4d -j MASQUERADE
+```
+
+and conntrack then expects the reply at the tunnel address (`dst=10.99.0.1`).
+No `-o` device is given, so teardown does not need to know the tunnel name.
+
 The xtables `MARK` target has the behaviour the design needs: `iptable_mangle`
 calls `ip_route_me_harder()` when a rule changes `skb->mark`, so the packet is
 rerouted through table 100 before transmission. `nimbus-helper` therefore uses
@@ -421,6 +441,12 @@ Bugs the integration caught, both now fixed:
   undoes everything on any failure.
 - The installer used `systemctl enable --now`, which does not restart an
   already-running unit, so upgrades kept executing the previous binary.
+- Included apps had no connectivity at all: the mark rerouted their packets
+  correctly, but they still carried the source address chosen before the mark
+  existed, so the exit dropped them. Fixed with a `MASQUERADE` rule for marked
+  traffic; conntrack now expects replies at the tunnel address. This is the kind
+  of failure a dummy device cannot show — the source rewrite only matters once a
+  real peer validates it.
 
 Known gaps at this stage: DNS is not yet redirected (§4.4), the helper is not
 packaged into the deb/AppImage (the install script is manual), and nothing has

@@ -179,22 +179,33 @@ read back with `iptables -t mangle -L OUTPUT -v -x -n`.
 
 This is the part that makes or breaks the feature.
 
-- Included apps must not keep using the host resolver: systemd-resolved answers
-  over the physical link, so names would resolve to addresses that the policy
-  route then sends outside the tunnel.
-- `iptables` (the `nat` table, whose OUTPUT hook reroutes like `mangle` does)
-  redirects UDP/TCP 53 from the selected cgroup to a helper-owned forwarder on
-  loopback.
-- That forwarder runs outside the cgroup and is therefore not marked, so it
-  must bind to the tunnel device explicitly (`SO_BINDTODEVICE`, or bind to the
-  tunnel address) and forward to the DNS servers Eddie reports for the session.
-- Non-selected apps keep the original resolver untouched.
-- Prototype scope: one forwarder, UDP and TCP, no DNSSEC, short-TTL cache only.
+Implemented without a proxy or a forwarder:
 
-Until this lands, included apps still resolve through the host resolver over the
-physical link. That leaks the *names* being resolved (not the traffic), and can
-return addresses that the policy route then sends outside the tunnel. The UI
-must say so.
+```
+iptables -t nat -A OUTPUT -m cgroup --path nimbus.apps -p udp --dport 53 \
+  -j DNAT --to-destination 1.1.1.1:53
+```
+
+and the same for TCP. An included app asks the loopback resolver, which answers
+over the *physical* link and leaks every name it looks up. Rewriting the
+destination to a public resolver fixes that almost for free: the packet already
+carries the mark when the NAT chain runs, so the reroute lands in table 100 and
+the query travels through the tunnel like any other traffic.
+
+Details and trade-offs:
+
+- Both transports are covered. A resolver retries over TCP when a reply is
+  truncated, and that path would otherwise leak.
+- The reply is un-NATed twice (DNAT back to the loopback resolver, SNAT back to
+  the app), so the app sees an answer from the address it asked.
+- AirVPN's own resolvers live inside the tunnel, but Eddie does not expose them
+  over jsoninout, so `1.1.1.1` is used. The query leaves through the VPN, so the
+  ISP cannot see it; the exit can, as it could with any plaintext DNS.
+- Local-only names (`.local`, the physical network's search domain) stop
+  resolving for included apps. That is the cost of not leaking, and the UI says
+  so.
+- DoH/DoT is untouched: those connections are already inside the tunnel.
+- Non-selected apps keep the original resolver.
 
 ### 4.5 Lifecycle
 

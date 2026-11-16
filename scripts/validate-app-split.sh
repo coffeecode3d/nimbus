@@ -169,6 +169,34 @@ else
   fail "source address was not rewritten to the tunnel device"
 fi
 
+# DNS must be rewritten to the tunnel resolver, or every name an included app
+# looks up is visible outside the VPN. The dummy has no peer, so the query gets
+# no answer — conntrack still proves the destination was rewritten.
+say "-- DNS from an included process:"
+python3 - <<'PY'
+import os, socket, struct
+with open("/sys/fs/cgroup/nimbus.apps/cgroup.procs", "w") as f:
+    f.write(str(os.getpid()) + "\n")
+q = struct.pack(">HHHHHH", 0x4242, 0x0100, 1, 0, 0, 0) + b"\x06github\x03com\x00" + struct.pack(">HH", 1, 1)
+s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+s.settimeout(1.5)
+s.sendto(q, ("127.0.0.53", 53))
+try:
+    s.recvfrom(512)
+except Exception:
+    pass
+PY
+if grep -q "dst=1.1.1.1" /proc/net/nf_conntrack 2>/dev/null; then
+  pass "DNS from the cgroup rewritten to the tunnel resolver"
+else
+  fail "DNS was not rewritten; queries would leak outside the VPN"
+fi
+if iptables -t nat -C OUTPUT -m cgroup --path "nimbus.apps" -p udp --dport 53 -j DNAT --to-destination 1.1.1.1:53 2>/dev/null; then
+  pass "DNS redirect rule installed"
+else
+  fail "DNS redirect rule missing"
+fi
+
 say "== stop helper"
 kill -TERM "$ENFORCE_PID" 2>/dev/null
 wait "$ENFORCE_PID" 2>/dev/null

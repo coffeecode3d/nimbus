@@ -2495,3 +2495,46 @@ body,
     padding: 24px;
   }
 }
+
+/* Apps page: header status + explanatory notes. */
+.apps-status {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.apps-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+}
+
+.apps-dot.is-live {
+  background: var(--ok);
+  box-shadow: 0 0 0 3px var(--ok-soft);
+}
+
+.apps-notes {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text-dim);
+  font-size: 11.5px;
+  line-height: 1.55;
+}
+
+.apps-notes strong {
+  color: var(--text);
+  font-weight: 550;
+}
+
+.apps-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

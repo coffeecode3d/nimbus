@@ -77,6 +77,45 @@ pub fn masquerade_rule_delete() -> Vec<String> {
     nat_rule(Op::Delete)
 }
 
+/// Resolver that included apps are forced to use.
+///
+/// AirVPN's own resolvers live inside the tunnel (10.4.0.1 and friends) but are
+/// not exposed by Eddie over jsoninout, so a public resolver is used instead.
+/// The query still leaves through the VPN, so the ISP cannot see it and only the
+/// exit can.
+pub const DNS_RESOLVER: &str = "1.1.1.1";
+
+/// Force DNS from the selected apps through the tunnel.
+///
+/// An included app asks the system resolver on loopback, which answers over the
+/// *physical* link — the names you look up leak outside the VPN. Rewriting the
+/// destination to a public resolver and letting the existing mark carry it
+/// through the tunnel fixes that without a proxy: the packet is already marked
+/// when the NAT chain runs, so the reroute lands in table [`TABLE`].
+///
+/// Local-only names (`.local`, search domains from the physical network) will
+/// stop resolving for these apps, which is the price of not leaking.
+pub fn dns_rule(op: Op, proto: &str) -> Vec<String> {
+    vec![
+        "-t".into(),
+        "nat".into(),
+        op.flag().into(),
+        "OUTPUT".into(),
+        "-m".into(),
+        "cgroup".into(),
+        "--path".into(),
+        CGROUP_NAME.into(),
+        "-p".into(),
+        proto.into(),
+        "--dport".into(),
+        "53".into(),
+        "-j".into(),
+        "DNAT".into(),
+        "--to-destination".into(),
+        format!("{DNS_RESOLVER}:53"),
+    ]
+}
+
 /// Program and arguments for the IPv4 mark rule.
 pub fn mark_rule() -> Vec<String> {
     rule("iptables", Op::Add)
@@ -103,14 +142,14 @@ pub fn v6_drop_rule_delete() -> Vec<String> {
     v6_rule(Op::Delete)
 }
 
-enum Op {
+pub enum Op {
     Add,
     Check,
     Delete,
 }
 
 impl Op {
-    fn flag(&self) -> &'static str {
+    pub fn flag(&self) -> &'static str {
         match self {
             Op::Add => "-A",
             Op::Check => "-C",
@@ -335,6 +374,19 @@ mod tests {
             mark_rule_delete().join(" "),
             "-t mangle -D OUTPUT -m cgroup --path nimbus.apps -j MARK --set-mark 0x4e4d"
         );
+    }
+
+    #[test]
+    fn included_apps_dns_is_forced_into_the_tunnel() {
+        assert_eq!(
+            dns_rule(Op::Add, "udp").join(" "),
+            "-t nat -A OUTPUT -m cgroup --path nimbus.apps -p udp --dport 53 -j DNAT --to-destination 1.1.1.1:53"
+        );
+        assert!(dns_rule(Op::Delete, "tcp").join(" ").contains("-D OUTPUT"));
+        assert!(dns_rule(Op::Check, "udp").join(" ").contains("-C OUTPUT"));
+        // Both transports must be covered: a resolver retries over TCP when a
+        // reply is truncated, and that would otherwise leak.
+        assert!(dns_rule(Op::Add, "tcp").join(" ").contains("-p tcp"));
     }
 
     #[test]

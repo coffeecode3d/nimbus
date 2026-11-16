@@ -31,7 +31,7 @@ export interface Stats {
   upSamples: number[];
 }
 
-export type View = "connect" | "servers" | "settings";
+export type View = "connect" | "servers" | "apps" | "settings";
 
 export interface EngineInfo {
   found: boolean;

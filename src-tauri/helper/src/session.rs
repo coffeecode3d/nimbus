@@ -186,6 +186,9 @@ fn reset_state() {
     exec::remove_rule("iptables", &plan::mark_rule_delete());
     exec::remove_rule("ip6tables", &plan::v6_drop_rule_delete());
     exec::remove_rule("iptables", &plan::masquerade_rule_delete());
+    for proto in ["udp", "tcp"] {
+        exec::remove_rule("iptables", &plan::dns_rule(plan::Op::Delete, proto));
+    }
     exec::remove_rule("iptables", &plan::masquerade_rule_delete());
     exec::run_ignore("ip", &plan::table_flush());
     exec::run_ignore("ip", &plan::rule_del());
@@ -213,6 +216,17 @@ fn install(tunnel: &str, app_ids: &[String], owner: Option<u32>) -> Result<(), S
     // packet, while an nftables `meta mark set` in OUTPUT runs after the route
     // lookup and would let the packet leave unsteered.
     exec::ensure_rule("iptables", &plan::mark_rule(), &plan::mark_rule_check())?;
+
+    // Force the selected apps' DNS through the tunnel. Without this their
+    // queries go to the loopback resolver, which answers over the physical
+    // link and leaks every name they look up.
+    for proto in ["udp", "tcp"] {
+        exec::ensure_rule(
+            "iptables",
+            &plan::dns_rule(plan::Op::Add, proto),
+            &plan::dns_rule(plan::Op::Check, proto),
+        )?;
+    }
     exec::ensure_rule(
         "ip6tables",
         &plan::v6_drop_rule(),

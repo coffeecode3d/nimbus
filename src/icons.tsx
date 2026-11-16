@@ -32,6 +32,15 @@ export const Globe = (p: P) => (
   </svg>
 );
 
+export const Apps = (p: P) => (
+  <svg {...base(p)}>
+    <rect x="3.5" y="3.5" width="7" height="7" rx="2" />
+    <rect x="13.5" y="3.5" width="7" height="7" rx="2" />
+    <rect x="3.5" y="13.5" width="7" height="7" rx="2" />
+    <rect x="13.5" y="13.5" width="7" height="7" rx="2" />
+  </svg>
+);
+
 export const Sliders = (p: P) => (
   <svg {...base(p)}>
     <path d="M4 7h9M17 7h3M4 17h3M11 17h9" />

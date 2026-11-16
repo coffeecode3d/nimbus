@@ -5,11 +5,12 @@ import { useAppearance } from "./appearance";
 import type { View } from "./types";
 import serversJson from "./servers.json";
 import type { ServerInfo } from "./types";
-import { BrandMark, ChevronRight, Globe, Moon, Power, Sliders, Sun } from "./icons";
+import { Apps, BrandMark, ChevronRight, Globe, Moon, Power, Sliders, Sun } from "./icons";
 import { Spinner } from "./components";
 import { ConnectScreen } from "./screens/Connect";
 import { EngineSetup } from "./screens/EngineSetup";
 import { ServersScreen } from "./screens/Servers";
+import { AppsScreen } from "./screens/Apps";
 import { SettingsScreen } from "./screens/Settings";
 
 const servers = serversJson as ServerInfo[];
@@ -17,6 +18,7 @@ const servers = serversJson as ServerInfo[];
 const NAV: { id: View; label: string; icon: typeof Power }[] = [
   { id: "connect", label: "Connect", icon: Power },
   { id: "servers", label: "Servers", icon: Globe },
+  { id: "apps", label: "Apps", icon: Apps },
   { id: "settings", label: "Settings", icon: Sliders },
 ];
 
@@ -32,7 +34,7 @@ export function App() {
   const appearance = useAppearance();
   const [view, setView] = useState<View>(() => {
     const q = new URLSearchParams(window.location.search).get("view");
-    return q === "servers" || q === "settings" ? q : "connect";
+    return q === "servers" || q === "apps" || q === "settings" ? q : "connect";
   });
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | null>(null);
@@ -60,7 +62,8 @@ export function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "1" && (e.metaKey || e.ctrlKey)) setView("connect");
       if (e.key === "2" && (e.metaKey || e.ctrlKey)) setView("servers");
-      if (e.key === "3" && (e.metaKey || e.ctrlKey)) setView("settings");
+      if (e.key === "3" && (e.metaKey || e.ctrlKey)) setView("apps");
+      if (e.key === "4" && (e.metaKey || e.ctrlKey)) setView("settings");
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -171,12 +174,14 @@ export function App() {
             onOpenConnect={() => setView("connect")}
           />
         )}
+        {view === "apps" && <AppsScreen engine={engine} notify={notify} />}
         {view === "settings" && (
           <SettingsScreen
             engine={engine}
             appearance={appearance}
             updates={updates}
             notify={notify}
+            onOpenApps={() => setView("apps")}
           />
         )}
       </main>

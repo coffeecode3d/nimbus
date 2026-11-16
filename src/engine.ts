@@ -230,6 +230,10 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     }, 1500);
   }, [state, serverId]);
 
+  const refreshApps = useCallback(async () => {
+    // Preview mode has no helper service; the mock list is static.
+  }, []);
+
   const disconnect = useCallback(() => {
     if (state === "disconnected" || state === "disconnecting" || state === "blocked") return;
     setState("disconnecting");
@@ -309,7 +313,7 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     appSplit,
     setAppSplit: (next: AppSplitConfig) => setAppSplitState(next),
     runningApps: MOCK_RUNNING_APPS,
-    refreshApps: async () => {},
+    refreshApps,
     appSplitAvailable: true,
     appSplitError: null,
     appSplitApplied,

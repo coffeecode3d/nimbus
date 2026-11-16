@@ -287,8 +287,69 @@ Crate `src-tauri/helper-win` (`nimbus-split-win`):
   Anything it cannot identify is left as zero, which the driver reads as "that
   family is unavailable" rather than a guess.
 - `driver` — opens `\\.\MULLVADSPLITTUNNEL`, walks
-  `STARTED → INITIALIZED → READY → ENGAGED`, drains events. Type-checked
-  against `x86_64-pc-windows-gnu`; not yet exercised on Windows.
+  `STARTED → INITIALIZED → READY → ENGAGED`, drains events.
+- `firewall` — registers the two WFP sublayers the driver attaches its filters
+  to, and never creates itself (see below).
+
+### 5.5 What running it against the real driver proved
+
+Validated in the VM on Windows 11 build 26300, with a real WireGuard tunnel
+(`10.99.0.2`) alongside the physical adapter (`10.0.2.15`):
+
+    plan: 1 image(s), 130 process(es), tunnel Some(10.99.0.2), internet Some(10.0.2.15)
+      exclude \Device\HarddiskVolume3\Windows\System32\curl.exe
+    driver state: Started
+    WFP sublayers registered
+    engaged; excluding 1 image(s)
+    StartSplitting { pid: 1628, reason: 6, image: "\Device\HarddiskVolume3\Windows\System32\curl.exe" }
+    StartSplitting { pid: 5256, reason: 5, image: "\Device\HarddiskVolume3\Windows\System32\conhost.exe" }
+    StopSplitting  { pid: 1628, reason: 8, ... }
+
+Reason 6 is `BY_CONFIG|PROCESS_ARRIVING`, 5 is
+`BY_INHERITANCE|PROCESS_ARRIVING` and 8 is `PROCESS_DEPARTING`, so the excluded
+application is split, its child inherits that, and both are cleared on exit.
+Device-path mapping, the process tree and the adapter addresses were all correct
+on the first run.
+
+Three findings came out of actually running it, none of which are visible from
+the headers:
+
+- **The driver never creates its WFP sublayers.** It creates a provider,
+  callouts and filters, but the filters attach to two sublayers whose GUIDs it
+  takes from `IOCTL_ST_INITIALIZE` and expects the client to have registered —
+  which is what Mullvad's daemon does. Without them, engaging fails at
+  `SET_CONFIGURATION` with `FWP_E_SUBLAYER_NOT_FOUND` (`0x80320007`). `firewall`
+  registers them with `FwpmSubLayerAdd0` and treats `FWP_E_ALREADY_EXISTS`
+  (`0x80320009`) as success. Note the two codes are adjacent and easy to swap:
+  the first version of this had them the wrong way round.
+- **The control device is exclusive** (`WdfDeviceInitSetExclusive`), so exactly
+  one process can hold it. With Mullvad's own app installed its daemon owns the
+  device and ours gets `ACCESS_DENIED`. In production Nimbus owns the driver and
+  the app is not involved; for testing, stop their daemon and register the bare
+  `.sys` (`sc create ... type= kernel binPath= ...`), which is the architecture
+  we want anyway.
+- **The driver keeps its state across clients.** One that exits without
+  resetting leaves the driver in `READY`/`ENGAGED`, where `INITIALIZE` is
+  rejected as `STATUS_INVALID_DEVICE_REQUEST`. Reset whenever the driver is not
+  found in `STARTED`.
+
+Testing with the Mullvad *app* installed is a dead end for a second reason: its
+persistent WFP objects use the driver's fixed GUIDs, so even a fresh boot
+collides. The bare driver is both the correct product shape and the only
+workable test setup.
+
+### 5.6 Driving the test VM
+
+The guest is only reachable over the tunnel once WireGuard is up with
+`AllowedIPs = 0.0.0.0/0`: the replies to QEMU's forwarded port are then routed
+into the tunnel, so `ssh -p 2222` to the host stops answering while
+`ssh nimbus@10.99.0.2` works. `winsh.sh` and `winscp.sh` take `SSH_HOST` /
+`SSH_PORT` for exactly this.
+
+Two smaller traps: `winsh.sh -elevated` must upload its payload rather than pass
+it through `schtasks /tr`, which rejects anything over 261 characters; and a
+`powershell -File` under a SYSTEM task is subject to the execution policy, so
+the script has to set `-Scope Process Bypass` itself.
 
 The wire format was checked against the upstream headers rather than only
 against our own unit tests, because a wrong size would fail on the machine and

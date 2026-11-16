@@ -1,0 +1,17 @@
+[package]
+name = "nimbus-helper"
+version = "0.1.8"
+description = "Privileged per-app split tunneling helper for Nimbus"
+authors = ["Nimbus contributors"]
+license = "GPL-3.0-or-later"
+edition = "2024"
+rust-version = "1.90"
+
+[[bin]]
+name = "nimbus-helper"
+path = "src/main.rs"
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

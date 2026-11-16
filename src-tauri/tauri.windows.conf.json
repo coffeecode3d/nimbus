@@ -1,4 +1,4 @@
-@{
+{
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "build": {
     "beforeBuildCommand": "pnpm build && cargo build --release -p nimbus-split-win --manifest-path src-tauri/Cargo.toml"

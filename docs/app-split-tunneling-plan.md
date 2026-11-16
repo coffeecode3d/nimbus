@@ -485,6 +485,46 @@ which also overrides `beforeBuildCommand` to build `nimbus-split-win` for the
 host. The installer path has been exercised by hand on the test machine but the
 produced NSIS package has not itself been run.
 
+### 5.8 The Windows installer
+
+`src-tauri/nsis/hooks.nsh` registers both services after the files are copied,
+and the driver plus the service binary are bundled by `bundle.resources` in
+`tauri.windows.conf.json`, which also overrides `beforeBuildCommand` to build
+`nimbus-split-win` for the host.
+
+Four things only showed up by running the produced installer in the VM:
+
+- **A hook that does nothing looks exactly like a hook that is not there.** A
+  silent install leaves no evidence, so the hook writes
+  `service-install.log` next to the app. That log is what identified the next
+  three faults, and it is what a user can send when the Apps page reports the
+  service as missing.
+- **NSIS is a 32-bit process.** Under WOW64 file-system redirection `$SYSDIR`
+  resolves to `SysWOW64`, so a driver copied to `$SYSDIR\drivers` lands
+  somewhere the kernel will not load it from, and the service that points at it
+  fails with `ERROR_FILE_NOT_FOUND`. The 64-bit agent installs the driver
+  itself (`--install-driver`) so the path is never reinterpreted.
+- **Rust's windows-msvc targets link `VCRUNTIME140.dll` dynamically**, and a
+  fresh Windows has no Visual C++ redistributable. The hook's
+  `nsExec::ExecToLog` then returned `-1073741515` (`STATUS_DLL_NOT_FOUND`) and
+  registered nothing at all — which reads like the hook never ran. `.cargo/config.toml`
+  now sets `target-feature=+crt-static`.
+- **That config has to be at the repository root.** Cargo resolves
+  `.cargo/config.toml` by walking up from the *working directory*, and the
+  service is built from the root with `--manifest-path src-tauri/Cargo.toml`,
+  so a config inside `src-tauri` was ignored for exactly the binary that needed
+  it. Checking the produced executable for a `VCRUNTIME140.dll` import is a
+  one-line way to confirm the flag took effect.
+
+The installer is `perMachine`: it ships a kernel driver and a LocalSystem
+service, so a per-user installation cannot register either. Run as SYSTEM with a
+per-user installer during testing, the files went to the system profile and no
+services appeared.
+
+Verified from the produced `Nimbus_0.2.0_x64-setup.exe`: installed to
+`C:\Program Files\Nimbus`, both services `Running`, the driver in
+`System32\drivers`, and the pipe answering `status` and `begin` afterwards.
+
 ## 5a. Windows design (original notes)
 ### 5.1 Why user mode is not enough
 

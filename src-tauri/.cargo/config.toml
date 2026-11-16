@@ -1,0 +1,14 @@
+# Ship executables that do not need the Visual C++ redistributable.
+#
+# Rust's windows-msvc targets link the CRT dynamically by default, so the binary
+# fails at process start with STATUS_DLL_NOT_FOUND (0xC0000135) on a machine
+# without VCRUNTIME140.dll — which is every fresh Windows install, including the
+# test VM. The installer's hook hit exactly that: `--install` returned
+# -1073741515 and silently registered nothing.
+#
+# Static linking applies to every crate built for this target in the workspace,
+# Nimbus itself included, which also removes the redistributable from the app's
+# own requirements.
+
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

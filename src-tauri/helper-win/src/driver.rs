@@ -93,8 +93,10 @@ impl Driver {
         };
         if ok == 0 {
             // SAFETY: GetLastError has no preconditions.
-            let code = unsafe { GetLastError() };
-            return Err(format!("driver IOCTL 0x{code:08X} failed"));
+            let error = unsafe { GetLastError() };
+            return Err(format!(
+                "driver IOCTL 0x{code:08X} failed (Win32 error 0x{error:08X})"
+            ));
         }
         output.truncate(returned as usize);
         Ok(output)
@@ -107,6 +109,17 @@ impl Driver {
     /// STARTED → INITIALIZED.
     pub fn initialize(&self, sublayers: &proto::SublayerGuids) -> Result<(), String> {
         self.ioctl(proto::IOCTL_ST_INITIALIZE, &sublayers.encode())
+    }
+
+    /// Return the driver to `STARTED`, releasing everything a previous client
+    /// registered.
+    ///
+    /// The driver keeps its state across clients: a process that engaged it and
+    /// then exited leaves it in `READY` or `ENGAGED`, where `INITIALIZE` is no
+    /// longer valid and the first IOCTL fails with `STATUS_INVALID_DEVICE_REQUEST`
+    /// (Win32 `ERROR_INVALID_FUNCTION`). Reset before initialising.
+    pub fn reset(&self) -> Result<(), String> {
+        self.ioctl_raw(proto::IOCTL_ST_RESET, None, 0).map(|_| ())
     }
 
     /// INITIALIZED → READY: hand over the process tree that already exists.
@@ -234,7 +247,16 @@ pub fn run_console_session(path: &str) -> Result<(), String> {
     let _ = system.addresses();
 
     let driver = Driver::open()?;
-    println!("driver state: {:?}", driver.state()?);
+    let state = driver.state()?;
+    println!("driver state: {state:?}");
+
+    // A previous client may have left the driver mid-sequence, where INITIALIZE
+    // is rejected. Reset first so the sequence always starts from STARTED.
+    if state != proto::DriverState::Started {
+        println!("resetting the driver to STARTED");
+        driver.reset()?;
+        println!("driver state after reset: {:?}", driver.state()?);
+    }
 
     // Two stable GUIDs of our own; the driver only needs them to namespace its
     // WFP filters. They must stay the same across restarts so stale filters can
@@ -243,11 +265,32 @@ pub fn run_console_session(path: &str) -> Result<(), String> {
         baseline: *b"nimbus-split-bas",
         dns: *b"nimbus-split-dns",
     };
+    // The driver attaches its filters to two sublayers that it never creates
+    // itself; registering them first is what makes engaging possible.
+    let firewall = crate::firewall::Firewall::open()?;
+    firewall.ensure_sublayer(sublayers.baseline, "Nimbus split tunnel")?;
+    firewall.ensure_sublayer(sublayers.dns, "Nimbus split tunnel DNS")?;
+    println!("WFP sublayers registered");
+
     driver.initialize(&sublayers)?;
     driver.register_processes(&plan.tree)?;
     driver.register_addresses(plan.addresses)?;
     driver.set_configuration(&plan.images)?;
-    println!("engaged; excluding {} image(s)", plan.images.len());
+
+    // The driver only enters ENGAGED when it has a tunnel address to steer
+    // towards; with no tunnel it accepts the configuration and waits in READY.
+    // Report what it actually says rather than assuming.
+    match driver.state()? {
+        proto::DriverState::Engaged => println!(
+            "engaged; excluding {} image(s)",
+            plan.images.len()
+        ),
+        other => println!(
+            "configuration accepted; driver is {other:?} (no tunnel address, so nothing is \
+             steered yet); {} image(s) staged",
+            plan.images.len()
+        ),
+    }
 
     loop {
         match driver.next_event()? {

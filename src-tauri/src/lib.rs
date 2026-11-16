@@ -1,6 +1,7 @@
 mod credentials;
 mod engine;
 mod installer;
+mod socks5;
 mod split;
 
 use tauri::Manager;

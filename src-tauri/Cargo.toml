@@ -27,6 +27,9 @@ tauri-plugin-log = "2"
 keyring = "4"
 reqwest = { version = "0.13", default-features = false, features = ["blocking", "rustls", "json"] }
 sha2 = "0.10"
+# Manual socket creation for the SOCKS5 proxy: bind the source address before
+# connecting, which `std::net::TcpStream` cannot do.
+socket2 = "0.6"
 tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 

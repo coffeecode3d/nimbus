@@ -241,6 +241,28 @@ engine with the lock disabled, which makes Eddie load its recovery file and
 tear down any rules left by an interrupted session. Aborted connects do this
 automatically.
 
+### Split tunneling
+
+**Settings → Split tunneling** lets chosen IPv4 addresses and subnets bypass the
+tunnel. Nimbus keeps the list in `localStorage` (`nimbus.splitTunnel`) and
+passes it to the connecting engine as Eddie's documented `routes.custom` option
+(`address-or-range,out,note;…`). Eddie's own route manager installs the
+more-specific routes through the physical gateway before the tunnel comes up and
+removes them on disconnect; Nimbus never edits routes or firewall rules.
+
+- Exclude mode only, IPv4 only in this release.
+- Presets for private LAN ranges and multicast, plus any address or CIDR.
+- Changes take effect on the next connection; the UI offers a **Reconnect**
+  button when the active session is using an older list.
+- Excluded traffic is **not** protected by the VPN: those destinations see your
+  real IP address and your ISP can see the traffic. DNS still goes through the
+  tunnel, so a hostname can resolve to an address that is not excluded. Prefer
+  numeric addresses or CIDRs.
+
+App-based split tunneling is not available: it needs process tracking in a
+privileged component (cgroups/nftables on Linux, a signed WFP driver on
+Windows), which would cross Nimbus's UI-only boundary.
+
 ## Probe the real engine
 
 Quit Eddie first (its single-instance lock and privileged service belong to the
@@ -320,6 +342,8 @@ inline script, so there is no flash of the wrong theme on launch.
     provider allowlist + DNS, automatic disarm on every failure path, and a
     visible "lock is armed" indicator.
 11. **Parity checks** — DNS-leak test, suspend/resume, network change, IPv6.
+12. ~~**Split tunneling** — IPv4/IP-subnet exclusions in Settings, handed to
+    Eddie as `routes.custom`.~~
 
 ### Windows and split tunnelling
 
@@ -335,12 +359,12 @@ host and code signing the Nimbus installer.
 **Split tunnelling:** Eddie's core has no application/process-based split
 tunnel, and no `split tunnel` code exists in `Lib.Core`. It does support
 **destination-route** exceptions through `routes.custom`
-(`address-or-range,in|out,note;…`), applied when the tunnel is built. That is
-enough for an IP/subnet-based "route these ranges outside the VPN" feature
-(reconnect required), with no engine changes. Per-app split tunnelling would
-need Nimbus to add its own privileged routing component (cgroups/nftables on
-Linux, WFP on Windows), which is a much larger, security-sensitive project and
-is deliberately out of scope for v1.
+(`address-or-range,in|out,note;…`), applied when the tunnel is built. Nimbus
+exposes those as **Settings → Split tunneling** (IPv4, exclude mode, reconnect
+required), with no engine changes. Per-app split tunnelling would need Nimbus
+to add its own privileged routing component (cgroups/nftables on Linux, WFP on
+Windows), which is a much larger, security-sensitive project and is deliberately
+out of scope for v1.
 
 ## Legal
 

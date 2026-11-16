@@ -47,6 +47,9 @@ pub struct StartOptions {
     pub mode: Option<String>,
     pub port: Option<u16>,
     pub netlock: Option<bool>,
+    /// Eddie `routes.custom` value. Nimbus sends this on every connecting
+    /// engine; an empty string is an override that clears stale profile rules.
+    pub routes_custom: Option<String>,
     /// Account credentials for the session authorization. Eddie's jsoninout
     /// `options.set` path silently ignores the `password` option (its type is
     /// `password`, and the JSON setter only handles `text`/choice/bool/number
@@ -387,6 +390,13 @@ fn build_args(options: &StartOptions, profile: &Path) -> Vec<String> {
     }
     if let Some(port) = options.port {
         args.push(flag("mode.port", port));
+    }
+    // Always pass the value when present, including an empty string: Eddie
+    // reads a command-line option as an override, so this also clears stale
+    // `routes.custom` rules left in the saved profile when split tunneling is
+    // turned off.
+    if let Some(routes) = options.routes_custom.as_deref() {
+        args.push(flag("routes.custom", routes));
     }
     // Network lock is explicit: when it is off we also disable the mode and
     // the session-level switch, otherwise a value left in the profile (or the
@@ -1308,6 +1318,31 @@ mod tests {
         let idle = build_args(&StartOptions::default(), Path::new("/tmp/nimbus-profile"));
         assert!(!idle.iter().any(|arg| arg.starts_with("--login=")));
         assert!(!idle.iter().any(|arg| arg.starts_with("--password=")));
+    }
+
+    #[test]
+    fn custom_routes_are_passed_and_can_be_cleared() {
+        let routes = "192.168.0.0/16,out,Home LAN;203.0.113.7,out,Office printer";
+        let options = StartOptions {
+            routes_custom: Some(routes.into()),
+            ..Default::default()
+        };
+        let args = build_args(&options, Path::new("/tmp/nimbus-profile"));
+        assert!(args
+            .iter()
+            .any(|arg| arg == &format!("--routes.custom={routes}")));
+
+        // An empty value is still sent so a stale profile value is overridden.
+        let cleared = StartOptions {
+            routes_custom: Some(String::new()),
+            ..Default::default()
+        };
+        let args = build_args(&cleared, Path::new("/tmp/nimbus-profile"));
+        assert!(args.iter().any(|arg| arg == "--routes.custom="));
+
+        // Omitted entirely (an idle engine) leaves the profile untouched.
+        let absent = build_args(&StartOptions::default(), Path::new("/tmp/nimbus-profile"));
+        assert!(!absent.iter().any(|arg| arg.starts_with("--routes.custom=")));
     }
 
     /// The engine must not be tied to the transient worker that calls

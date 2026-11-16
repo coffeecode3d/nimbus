@@ -4,7 +4,19 @@ import type { UpdatesApi } from "../updates";
 import { ACCENTS } from "../appearance";
 import type { Appearance } from "../appearance";
 import { Field, Section, Select, Toggle, Button, Spinner } from "../components";
-import { Check } from "../icons";
+import { Check, X } from "../icons";
+import {
+  MAX_SPLIT_RULES,
+  SPLIT_TUNNEL_PRESETS,
+  findOverlap,
+  newRuleId,
+  parseCidr,
+  presetLabel,
+  presetRules,
+  sanitizeLabel,
+  serializeSplitTunnel,
+} from "../splitTunnel";
+import type { SplitTunnelPreset, SplitTunnelRule } from "../splitTunnel";
 
 export function SettingsScreen({
   engine,
@@ -40,6 +52,85 @@ export function SettingsScreen({
   const [notifications, setNotifications] = useState(true);
   const [autoReconnect, setAutoReconnect] = useState(true);
   const [mode, setMode] = useState("direct");
+  const [splitInput, setSplitInput] = useState("");
+  const [splitLabel, setSplitLabel] = useState("");
+  const [splitError, setSplitError] = useState<string | null>(null);
+
+  const split = engine.splitTunnel;
+  const splitRoutes = serializeSplitTunnel(split);
+  const splitPending =
+    engine.splitTunnelApplied !== null &&
+    engine.splitTunnelApplied !== splitRoutes &&
+    (engine.connected || engine.state === "connecting");
+
+  const addSplitRule = (raw: string, label: string) => {
+    const parsed = parseCidr(raw);
+    if (!parsed.ok) {
+      setSplitError(parsed.error);
+      return;
+    }
+    if (split.rules.length >= MAX_SPLIT_RULES) {
+      setSplitError(`You can exclude up to ${MAX_SPLIT_RULES} destinations.`);
+      return;
+    }
+    const overlap = findOverlap(split.rules, parsed.value);
+    if (overlap) {
+      setSplitError(
+        `${parsed.value.cidr} overlaps ${overlap.cidr}, which is already excluded.`,
+      );
+      return;
+    }
+    engine.setSplitTunnel({
+      ...split,
+      enabled: true,
+      rules: [
+        ...split.rules,
+        { id: newRuleId(), cidr: parsed.value.cidr, label: sanitizeLabel(label) },
+      ],
+    });
+    setSplitInput("");
+    setSplitLabel("");
+    setSplitError(null);
+    if (parsed.value.normalized) notify(`Saved as ${parsed.value.cidr}`);
+  };
+
+  const addSplitPreset = (preset: SplitTunnelPreset) => {
+    const def = SPLIT_TUNNEL_PRESETS[preset];
+    const candidates = presetRules(preset);
+    const next: SplitTunnelRule[] = [...split.rules];
+    for (const rule of candidates) {
+      if (next.length >= MAX_SPLIT_RULES) break;
+      if (next.some((existing) => existing.cidr === rule.cidr)) continue;
+      const parsed = parseCidr(rule.cidr);
+      if (!parsed.ok) continue;
+      if (findOverlap(next, parsed.value)) continue;
+      next.push(rule);
+    }
+    const added = next.length - split.rules.length;
+    if (added === 0) {
+      setSplitError(`${def.label} is already covered by your exclusions.`);
+      return;
+    }
+    engine.setSplitTunnel({ ...split, enabled: true, rules: next });
+    setSplitError(null);
+    notify(
+      added === candidates.length
+        ? `${def.label} added`
+        : `Added ${added} of ${candidates.length} ranges`,
+    );
+  };
+
+  const removeSplitRule = (id: string) => {
+    engine.setSplitTunnel({
+      ...split,
+      rules: split.rules.filter((rule) => rule.id !== id),
+    });
+    setSplitError(null);
+  };
+
+  const submitSplit = () => {
+    if (splitInput.trim()) addSplitRule(splitInput, splitLabel);
+  };
 
   return (
     <div className="settings">
@@ -205,6 +296,135 @@ export function SettingsScreen({
               ]}
             />
           </Field>
+        </Section>
+
+        <Section
+          title="Split tunneling"
+          note="Eddie's own route manager installs these exclusions; Nimbus never edits routes or firewall rules. IPv4 only for now. Changes apply the next time the tunnel connects."
+        >
+          <Field
+            title="Exclude destinations"
+            desc="Send chosen IPv4 addresses and subnets through your normal connection instead of the VPN."
+          >
+            <Toggle
+              label="Split tunneling"
+              checked={split.enabled}
+              onChange={(enabled) => {
+                setSplitError(null);
+                engine.setSplitTunnel({ ...split, enabled });
+              }}
+            />
+          </Field>
+
+          {split.enabled && (
+            <div className="split-panel">
+              <div className="split-presets" role="group" aria-label="Destination presets">
+                {(Object.keys(SPLIT_TUNNEL_PRESETS) as SplitTunnelPreset[]).map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    className="chip"
+                    title={SPLIT_TUNNEL_PRESETS[id].description}
+                    onClick={() => addSplitPreset(id)}
+                  >
+                    {SPLIT_TUNNEL_PRESETS[id].label}
+                  </button>
+                ))}
+              </div>
+
+              {split.rules.length > 0 ? (
+                <ul className="split-rules">
+                  {split.rules.map((rule) => (
+                    <li key={rule.id} className="split-rule">
+                      <span className="split-cidr mono">{rule.cidr}</span>
+                      <span className="split-rule-label">
+                        {rule.label || presetLabel(rule.preset) || "Excluded"}
+                      </span>
+                      <button
+                        type="button"
+                        className="split-remove"
+                        aria-label={`Remove ${rule.cidr}`}
+                        title="Remove"
+                        onClick={() => removeSplitRule(rule.id)}
+                      >
+                        <X size={13} />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="split-empty">
+                  No destinations yet. Add an address below or start with a preset.
+                </p>
+              )}
+
+              <div className="split-add">
+                <input
+                  className="text-input split-input"
+                  type="text"
+                  value={splitInput}
+                  placeholder="192.168.0.0/16 or 203.0.113.7"
+                  aria-label="Destination to exclude"
+                  spellCheck={false}
+                  maxLength={32}
+                  onChange={(e) => {
+                    setSplitInput(e.target.value);
+                    if (splitError) setSplitError(null);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      submitSplit();
+                    }
+                  }}
+                />
+                <input
+                  className="text-input split-input split-input-label"
+                  type="text"
+                  value={splitLabel}
+                  placeholder="Label (optional)"
+                  aria-label="Label for this destination"
+                  maxLength={48}
+                  onChange={(e) => setSplitLabel(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") {
+                      e.preventDefault();
+                      submitSplit();
+                    }
+                  }}
+                />
+                <Button variant="quiet" onClick={submitSplit} disabled={!splitInput.trim()}>
+                  Add
+                </Button>
+              </div>
+
+              {splitError && (
+                <p className="split-error" role="alert">
+                  {splitError}
+                </p>
+              )}
+
+              <p className="split-warning">
+                Excluded traffic does not go through the VPN. Those destinations see your real IP
+                address and your ISP can see the traffic. DNS still goes through the tunnel, so a
+                hostname can resolve to an address that is not excluded — prefer numeric addresses
+                or CIDRs.
+              </p>
+            </div>
+          )}
+
+          {splitPending && (
+            <div className="split-pending">
+              <span>
+                {split.enabled
+                  ? "Applies on your next connection."
+                  : "Split tunneling turns off on your next connection."}
+              </span>
+              <Button variant="quiet" onClick={engine.reconnect}>
+                Reconnect
+              </Button>
+            </div>
+          )}
         </Section>
 
         <Section

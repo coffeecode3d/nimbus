@@ -9,6 +9,12 @@ import type {
   Stats,
 } from "./types";
 import { isTauri, useLiveEngine } from "./liveEngine";
+import {
+  loadSplitTunnel,
+  saveSplitTunnel,
+  serializeSplitTunnel,
+} from "./splitTunnel";
+import type { SplitTunnelConfig } from "./splitTunnel";
 
 const SAMPLES = 56;
 
@@ -92,6 +98,11 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
   const [netlock, setNetlock] = useState(false);
   const [protocol, setProtocol] = useState<Protocol>("wireguard");
   const [port, setPort] = useState(443);
+  const [splitTunnel, setSplitTunnelState] = useState<SplitTunnelConfig>(() =>
+    loadSplitTunnel(),
+  );
+  const splitTunnelRef = useRef(splitTunnel);
+  const [splitTunnelApplied, setSplitTunnelApplied] = useState<string | null>(null);
   const [stats, setStats] = useState<Stats>(() => initial(initialConn()));
   const [error, setError] = useState<string | null>(null);
   const [login, setLogin] = useState("");
@@ -120,6 +131,15 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
   useEffect(() => {
     localStorage.setItem("nimbus.recent", JSON.stringify(recent));
   }, [recent]);
+
+  useEffect(() => {
+    saveSplitTunnel(splitTunnel);
+  }, [splitTunnel]);
+
+  const setSplitTunnel = useCallback((next: SplitTunnelConfig) => {
+    splitTunnelRef.current = next;
+    setSplitTunnelState(next);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -152,6 +172,7 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
   const connect = useCallback(() => {
     if (state === "connecting" || state === "connected") return;
     setState("connecting");
+    setSplitTunnelApplied(serializeSplitTunnel(splitTunnelRef.current));
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       setState("connected");
@@ -175,11 +196,26 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     else connect();
   }, [state, connect, disconnect]);
 
+  const reconnect = useCallback(() => {
+    if (state === "connected" || state === "connecting") {
+      setState("connecting");
+      setSplitTunnelApplied(serializeSplitTunnel(splitTunnelRef.current));
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => {
+        setState("connected");
+        setStats(initial("connected"));
+      }, 900);
+    } else {
+      connect();
+    }
+  }, [state, connect]);
+
   const selectServer = useCallback(
     (id: string) => {
       setServerId(id);
       if (state === "connected" || state === "connecting") {
         setState("connecting");
+        setSplitTunnelApplied(serializeSplitTunnel(splitTunnelRef.current));
         if (timer.current !== null) window.clearTimeout(timer.current);
         timer.current = window.setTimeout(() => {
           setState("connected");
@@ -214,12 +250,16 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     setProtocol,
     port,
     setPort,
+    splitTunnel,
+    setSplitTunnel,
+    splitTunnelApplied,
     stats,
     favorites,
     recent,
     toggleFavorite,
     connect,
     disconnect,
+    reconnect,
     stopForUpdate: async () => {
       if (timer.current !== null) window.clearTimeout(timer.current);
       setState("disconnected");

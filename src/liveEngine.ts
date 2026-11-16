@@ -10,6 +10,12 @@ import type {
   ServerInfo,
   Stats,
 } from "./types";
+import {
+  loadSplitTunnel,
+  saveSplitTunnel,
+  serializeSplitTunnel,
+} from "./splitTunnel";
+import type { SplitTunnelConfig } from "./splitTunnel";
 
 const SAMPLES = 56;
 const STATS_CALLBACK = "nimbus.stats";
@@ -52,6 +58,11 @@ export interface StartOptions {
   mode?: string;
   port?: number;
   netlock?: boolean;
+  /**
+   * Eddie's `routes.custom` value. Always sent by Nimbus: an empty string
+   * clears any value left in the saved profile when split tunneling is off.
+   */
+  routesCustom?: string;
   /**
    * Eddie's jsoninout `options.set` silently ignores the password option, so
    * the connecting engine receives the account credentials on its command
@@ -244,6 +255,11 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   const [netlock, setNetlock] = useState(false);
   const [protocol, setProtocol] = useState<Protocol>("wireguard");
   const [port, setPort] = useState(443);
+  const [splitTunnel, setSplitTunnelState] = useState<SplitTunnelConfig>(() =>
+    loadSplitTunnel(),
+  );
+  const splitTunnelRef = useRef(splitTunnel);
+  const [splitTunnelApplied, setSplitTunnelApplied] = useState<string | null>(null);
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -360,6 +376,10 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     localStorage.setItem("nimbus.recent", JSON.stringify(recent));
   }, [recent]);
 
+  useEffect(() => {
+    saveSplitTunnel(splitTunnel);
+  }, [splitTunnel]);
+
   const setLogin = useCallback((value: string) => {
     setLoginState(value);
     // Editing the account details means both the saved session and the
@@ -376,6 +396,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     credentialsVersion.current += 1;
     credentialsRef.current = null;
     setSignedIn(false);
+  }, []);
+
+  const setSplitTunnel = useCallback((next: SplitTunnelConfig) => {
+    // Update the ref immediately: callers often edit rules then press Connect
+    // in the same tick, before React commits the new state.
+    splitTunnelRef.current = next;
+    setSplitTunnelState(next);
   }, []);
 
   const send = useCallback(async (payload: object) => {
@@ -453,6 +480,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       // Only a connecting engine needs the account password. Idle engines used
       // to display the profile must not receive it.
       const credentials = connect ? credentialsRef.current : null;
+      // Always send the value, even when split tunneling is off: Eddie treats
+      // an empty `routes.custom` as an override and drops stale profile rules.
+      const routesCustom = serializeSplitTunnel(splitTunnelRef.current);
       const payload: StartOptions = {
         server: serverCode(options.serverId),
         protocol: options.protocol,
@@ -462,6 +492,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         // deactivate it over jsoninout, and a failed connect that leaves the
         // firewall armed locks the whole machine off the network.
         netlock: false,
+        routesCustom,
         login: credentials?.login,
         password: credentials?.password,
         session: pendingSession,
@@ -471,6 +502,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         const result = await invoke<StartResult>("engine_start", { options: payload });
         session.current = result.session;
         setInfo(result.info);
+        if (connect) setSplitTunnelApplied(routesCustom);
         startInFlight.current = false;
         return true;
       } catch (err) {
@@ -951,6 +983,18 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     else void connect();
   }, [state, connect, disconnect]);
 
+  const reconnect = useCallback(() => {
+    // Same path server switching uses: spawn a fresh engine with the current
+    // options, which also picks up a changed `routes.custom` value.
+    if (state === "connected" || state === "connecting") {
+      wantedConnect.current = true;
+      setState("connecting");
+      void start({ ...optionsRef.current }, true);
+    } else {
+      void connect();
+    }
+  }, [state, start, connect]);
+
   const selectServer = useCallback(
     (id: string) => {
       // Update the ref immediately: callers often do selectServer(id) then
@@ -1192,6 +1236,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     setProtocol,
     port,
     setPort,
+    splitTunnel,
+    setSplitTunnel,
+    splitTunnelApplied,
     stats,
     favorites,
     recent,
@@ -1199,6 +1246,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       setFavorites((f) => (f.includes(id) ? f.filter((x) => x !== id) : [...f, id])),
     connect,
     disconnect,
+    reconnect,
     stopForUpdate,
     toggle,
     selectServer,

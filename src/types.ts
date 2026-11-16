@@ -1,3 +1,5 @@
+import type { SplitTunnelConfig } from "./splitTunnel";
+
 export type ConnState =
   | "disconnected"
   | "connecting"
@@ -58,12 +60,19 @@ export interface EngineApi {
   setProtocol: (value: Protocol) => void;
   port: number;
   setPort: (value: number) => void;
+  /** Destinations excluded from the tunnel, persisted under nimbus.splitTunnel. */
+  splitTunnel: SplitTunnelConfig;
+  setSplitTunnel: (config: SplitTunnelConfig) => void;
+  /** `routes.custom` used by the session being connected; null before any connect. */
+  splitTunnelApplied: string | null;
   stats: Stats;
   favorites: string[];
   recent: string[];
   toggleFavorite: (id: string) => void;
   connect: () => void;
   disconnect: () => void;
+  /** Reconnect with the current settings, e.g. after changing split tunneling. */
+  reconnect: () => void;
   /** Stop the engine before the app replaces itself with an update. */
   stopForUpdate: () => Promise<void>;
   toggle: () => void;

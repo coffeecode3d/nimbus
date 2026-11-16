@@ -53,6 +53,21 @@ export function ConnectScreen({
   const busy = state === "connecting" || state === "disconnecting";
   const unavailable = engine.mode === "live" && (engine.status === "absent" || engine.status === "error");
   const engineMessage = engine.error ?? engine.info?.error ?? null;
+  // Split tunneling makes "everything is tunneled" false. Say how many
+  // destinations the active session excludes instead, and preview the count
+  // while disconnected.
+  const splitCount = engine.splitTunnel.enabled ? engine.splitTunnel.rules.length : 0;
+  const appliedSplitCount = engine.splitTunnelApplied
+    ? engine.splitTunnelApplied.split(";").filter(Boolean).length
+    : 0;
+  const sub =
+    state === "connected" && appliedSplitCount > 0
+      ? `${appliedSplitCount} destination${
+          appliedSplitCount === 1 ? "" : "s"
+        } bypass the VPN and are not protected by it.`
+      : state === "disconnected" && splitCount > 0
+        ? `${splitCount} destination${splitCount === 1 ? "" : "s"} will stay outside the VPN.`
+        : copy.sub;
 
   const copyIp = async () => {
     try {
@@ -71,7 +86,7 @@ export function ConnectScreen({
           {copy.eyebrow}
         </div>
         <h1>{copy.title}</h1>
-        <p>{copy.sub}</p>
+        <p>{sub}</p>
       </header>
 
       {engine.mode === "live" && (engineMessage || unavailable) && (

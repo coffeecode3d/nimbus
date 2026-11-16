@@ -16,6 +16,12 @@ import {
   serializeSplitTunnel,
 } from "./splitTunnel";
 import type { SplitTunnelConfig } from "./splitTunnel";
+import {
+  appSplitActive,
+  loadAppSplit,
+  saveAppSplit,
+} from "./appSplit";
+import type { AppSplitConfig, RunningApp } from "./appSplit";
 
 const SAMPLES = 56;
 const STATS_CALLBACK = "nimbus.stats";
@@ -63,6 +69,12 @@ export interface StartOptions {
    * clears any value left in the saved profile when split tunneling is off.
    */
   routesCustom?: string;
+  /**
+   * Eddie's `network.ipv4.mode`. `in` routes everything through the tunnel;
+   * `out` leaves the physical default route in place, which app-based include
+   * mode needs.
+   */
+  ipv4Mode?: "in" | "out";
   /**
    * Eddie's jsoninout `options.set` silently ignores the password option, so
    * the connecting engine receives the account credentials on its command
@@ -260,6 +272,17 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
   );
   const splitTunnelRef = useRef(splitTunnel);
   const [splitTunnelApplied, setSplitTunnelApplied] = useState<string | null>(null);
+  const [appSplit, setAppSplitState] = useState<AppSplitConfig>(() => loadAppSplit());
+  const appSplitRef = useRef(appSplit);
+  const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
+  const [appSplitAvailable, setAppSplitAvailable] = useState(false);
+  const [appSplitError, setAppSplitError] = useState<string | null>(null);
+  const [appSplitApplied, setAppSplitApplied] = useState<string[] | null>(null);
+  // Guards the one-shot `split_begin` for the current session.
+  const appSplitSent = useRef(false);
+  // Disconnects when the app policy cannot be installed. A ref keeps
+  // `applyStatus` free of a circular dependency on `disconnect`.
+  const failClosed = useRef<(message: string) => void>(() => {});
   const [stats, setStats] = useState<Stats>(emptyStats);
   const [favorites, setFavorites] = useState<string[]>(() => {
     try {
@@ -380,6 +403,10 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     saveSplitTunnel(splitTunnel);
   }, [splitTunnel]);
 
+  useEffect(() => {
+    saveAppSplit(appSplit);
+  }, [appSplit]);
+
   const setLogin = useCallback((value: string) => {
     setLoginState(value);
     // Editing the account details means both the saved session and the
@@ -397,6 +424,34 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     credentialsRef.current = null;
     setSignedIn(false);
   }, []);
+
+  const setAppSplit = useCallback((next: AppSplitConfig) => {
+    // Same reason as setSplitTunnel: callers edit and connect in one tick.
+    appSplitRef.current = next;
+    setAppSplitState(next);
+  }, []);
+
+  const refreshApps = useCallback(async () => {
+    try {
+      const available = await invoke<boolean>("split_available");
+      setAppSplitAvailable(available);
+      if (!available) {
+        setRunningApps([]);
+        setAppSplitError(null);
+        return;
+      }
+      const apps = await invoke<RunningApp[]>("split_apps");
+      setRunningApps(apps);
+      setAppSplitError(null);
+    } catch (err) {
+      setRunningApps([]);
+      setAppSplitError(String(err));
+    }
+  }, []);
+
+  useEffect(() => {
+    void refreshApps();
+  }, [refreshApps]);
 
   const setSplitTunnel = useCallback((next: SplitTunnelConfig) => {
     // Update the ref immediately: callers often edit rules then press Connect
@@ -446,6 +501,11 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       clearConnectRetry();
       setStatus("starting");
       setError(null);
+      // A new engine means a new tunnel; drop any policy from the previous one
+      // so a stale mark cannot outlive the device it pointed at.
+      appSplitSent.current = false;
+      setAppSplitApplied(null);
+      void invoke("split_end").catch(() => undefined);
       readyRef.current = false;
       // Tag this start before spawning. The engine can emit `engine.ready`
       // while `engine_start` is still resolving; without an id in advance the
@@ -480,9 +540,15 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       // Only a connecting engine needs the account password. Idle engines used
       // to display the profile must not receive it.
       const credentials = connect ? credentialsRef.current : null;
+      // App include mode needs Eddie to leave the system default route outside
+      // the tunnel, so it and destination exclusions are mutually exclusive:
+      // an `out` route only means anything when the tunnel *is* the default.
+      const includeApps = appSplitActive(appSplitRef.current);
       // Always send the value, even when split tunneling is off: Eddie treats
       // an empty `routes.custom` as an override and drops stale profile rules.
-      const routesCustom = serializeSplitTunnel(splitTunnelRef.current);
+      const routesCustom = includeApps
+        ? ""
+        : serializeSplitTunnel(splitTunnelRef.current);
       const payload: StartOptions = {
         server: serverCode(options.serverId),
         protocol: options.protocol,
@@ -493,6 +559,7 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
         // firewall armed locks the whole machine off the network.
         netlock: false,
         routesCustom,
+        ipv4Mode: includeApps ? "out" : "in",
         login: credentials?.login,
         password: credentials?.password,
         session: pendingSession,
@@ -535,6 +602,9 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     setActualServerName(null);
     session.current = null;
     setStatus("stopped");
+    appSplitSent.current = false;
+    setAppSplitApplied(null);
+    void invoke("split_end").catch(() => undefined);
     // Eddie's jsoninout API has no netlock command. A throwaway engine with
     // the lock disabled makes Eddie load its recovery file and tear down any
     // firewall rules left behind by a session that never shut down cleanly.
@@ -571,6 +641,27 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       }
       setError(null);
       setState("connected");
+      // Install the app policy once Eddie reports a live tunnel. With
+      // `network.ipv4.mode=out` nothing is inside the VPN until this succeeds,
+      // so a failure has to disconnect rather than leave the user believing a
+      // browser is protected when it is not.
+      if (appSplitActive(appSplitRef.current) && !appSplitSent.current) {
+        appSplitSent.current = true;
+        const apps = appSplitRef.current.apps;
+        void invoke("split_begin", { apps })
+          .then(() => {
+            setAppSplitApplied(apps);
+            setAppSplitError(null);
+          })
+          .catch((err) => {
+            appSplitSent.current = false;
+            setAppSplitApplied(null);
+            setAppSplitError(String(err));
+            failClosed.current(
+              `App split tunneling could not start, so nothing would have used the VPN: ${err}`,
+            );
+          });
+      }
     } else if (action === "pending") {
       // The engine has credentials and is working on a session; the earlier
       // "no connection available" was just the pre-login state.
@@ -938,6 +1029,15 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
       watchdog.current = null;
     }
     setState("disconnecting");
+    // Remove the policy before the tunnel goes away, so no packet is ever
+    // marked into a table whose device has gone.
+    appSplitSent.current = false;
+    setAppSplitApplied(null);
+    try {
+      await invoke("split_end");
+    } catch {
+      // Service not installed, or no session was active: nothing to undo.
+    }
     const sent = await send({ command: "mainaction.disconnect" });
     if (!sent) {
       setState("disconnected");
@@ -957,6 +1057,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     }, 6000);
   }, [state, send, clearConnectRetry]);
 
+  useEffect(() => {
+    failClosed.current = (message: string) => {
+      setError(message);
+      void disconnect();
+    };
+  }, [disconnect]);
+
   const stopForUpdate = useCallback(async () => {
     wantedConnect.current = false;
     clearConnectRetry();
@@ -970,6 +1077,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     setStatus("stopped");
     setActualServerName(null);
     setStats(emptyStats());
+    appSplitSent.current = false;
+    setAppSplitApplied(null);
+    try {
+      await invoke("split_end");
+    } catch {
+      // Nothing installed.
+    }
     try {
       await invoke("engine_stop");
     } catch {
@@ -1239,6 +1353,13 @@ export function useLiveEngine(servers: ServerInfo[], enabled: boolean): EngineAp
     splitTunnel,
     setSplitTunnel,
     splitTunnelApplied,
+    appSplit,
+    setAppSplit,
+    runningApps,
+    refreshApps,
+    appSplitAvailable,
+    appSplitError,
+    appSplitApplied,
     stats,
     favorites,
     recent,

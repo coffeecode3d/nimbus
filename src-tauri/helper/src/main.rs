@@ -14,29 +14,13 @@
 //! nimbus-helper status [--json]             what is installed right now
 //! ```
 
-mod apps;
-mod exec;
-mod plan;
-mod session;
+use nimbus_helper::{apps, ipc, plan, session, signal};
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::Duration;
 
-/// Set from a signal handler, so it must stay lock-free.
-static STOP: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn on_signal(_signal: libc::c_int) {
-    STOP.store(true, Ordering::SeqCst);
-}
-
 fn main() {
-    // Rust ignores SIGPIPE by default, which turns `nimbus-helper apps | head`
-    // into a panic. Restore the Unix behaviour for a CLI.
-    // SAFETY: SIG_DFL is a valid handler for SIGPIPE.
-    unsafe {
-        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
-    }
+    signal::reset_sigpipe();
 
     let args: Vec<String> = std::env::args().skip(1).collect();
     let code = match run(&args) {
@@ -57,6 +41,7 @@ fn run(args: &[String]) -> Result<i32, String> {
         "plan" => cmd_plan(rest),
         "enforce" => cmd_enforce(rest),
         "status" => cmd_status(rest),
+        "serve" => cmd_serve(rest),
         "version" | "--version" => {
             println!("nimbus-helper {}", env!("CARGO_PKG_VERSION"));
             Ok(0)
@@ -79,6 +64,7 @@ nimbus-helper {version}
   enforce --apps a,b [--tunnel NAME]       apply it until SIGTERM/stdin EOF
           [--dry-run] [--parent-death] [--self-test] [--allow-any-uid]
   status [--json]                          show what is installed right now
+  serve  [--socket PATH]                   run the root daemon Nimbus talks to
 
 Only processes owned by the invoking user (SUDO_UID/PKEXEC_UID) are ever moved
 into the tunnel, so a root daemon can never be steered into a user's session.
@@ -267,7 +253,7 @@ fn cmd_enforce(rest: &[String]) -> Result<i32, String> {
         }
         spawn_stdin_watch();
     }
-    install_signal_handlers();
+    signal::install();
 
     let mut session = session::Session::begin(&tunnel, &ids, owner)?;
     println!(
@@ -293,12 +279,22 @@ fn cmd_enforce(rest: &[String]) -> Result<i32, String> {
         }
     }
 
-    while !STOP.load(Ordering::SeqCst) {
+    while !signal::stopping() {
         thread::sleep(Duration::from_millis(200));
     }
 
     eprintln!("nimbus-helper: stopping");
     session.teardown();
+    Ok(0)
+}
+
+fn cmd_serve(rest: &[String]) -> Result<i32, String> {
+    session::require_root()?;
+    let socket = flag(rest, "socket").unwrap_or_else(|| ipc::DEFAULT_SOCKET.to_string());
+    signal::install();
+    if let Err(e) = ipc::serve(&socket) {
+        return Err(format!("daemon stopped: {e}"));
+    }
     Ok(0)
 }
 
@@ -334,16 +330,6 @@ fn cmd_status(rest: &[String]) -> Result<i32, String> {
 
 // ── lifecycle plumbing ─────────────────────────────────────────────────────
 
-fn install_signal_handlers() {
-    // SAFETY: `on_signal` only stores into an atomic, which is async-signal-safe.
-    let handler = on_signal as *const () as libc::sighandler_t;
-    unsafe {
-        libc::signal(libc::SIGTERM, handler);
-        libc::signal(libc::SIGINT, handler);
-        libc::signal(libc::SIGHUP, handler);
-    }
-}
-
 /// Tear down when the parent closes our stdin, which is how Nimbus signals
 /// "the UI is gone" without depending on a signal being delivered.
 fn spawn_stdin_watch() {
@@ -354,7 +340,7 @@ fn spawn_stdin_watch() {
         loop {
             match stdin.read(&mut buffer) {
                 Ok(0) | Err(_) => {
-                    STOP.store(true, Ordering::SeqCst);
+                    signal::request_stop();
                     break;
                 }
                 Ok(_) => {}

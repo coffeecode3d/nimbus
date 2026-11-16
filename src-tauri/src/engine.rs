@@ -50,6 +50,10 @@ pub struct StartOptions {
     /// Eddie `routes.custom` value. Nimbus sends this on every connecting
     /// engine; an empty string is an override that clears stale profile rules.
     pub routes_custom: Option<String>,
+    /// Eddie `network.ipv4.mode`. `in` (the default) routes everything through
+    /// the tunnel. `out` leaves the system default route on the physical
+    /// interface, which app-based include mode needs.
+    pub ipv4_mode: Option<String>,
     /// Account credentials for the session authorization. Eddie's jsoninout
     /// `options.set` path silently ignores the `password` option (its type is
     /// `password`, and the JSON setter only handles `text`/choice/bool/number
@@ -397,6 +401,20 @@ fn build_args(options: &StartOptions, profile: &Path) -> Vec<String> {
     // turned off.
     if let Some(routes) = options.routes_custom.as_deref() {
         args.push(flag("routes.custom", routes));
+    }
+    if let Some(mode) = options.ipv4_mode.as_deref().filter(|m| !m.is_empty()) {
+        args.push(flag("network.ipv4.mode", mode));
+        if mode == "out" {
+            // Without a default route through the tunnel Eddie's post-connect
+            // DNS check cannot pass: it resolves a probe name through the
+            // tunnel resolver, fails, resets the session, and loops forever on
+            // "Checking DNS failed". The check is the same switch Eddie shows
+            // as Settings -> DNS check.
+            args.push("--dns.check=false".to_string());
+            // Leave the host resolver alone. In include mode the helper owns
+            // DNS for the selected apps only.
+            args.push("--dns.mode=none".to_string());
+        }
     }
     // Network lock is explicit: when it is off we also disable the mode and
     // the session-level switch, otherwise a value left in the profile (or the
@@ -1343,6 +1361,34 @@ mod tests {
         // Omitted entirely (an idle engine) leaves the profile untouched.
         let absent = build_args(&StartOptions::default(), Path::new("/tmp/nimbus-profile"));
         assert!(!absent.iter().any(|arg| arg.starts_with("--routes.custom=")));
+    }
+
+    /// App-based include mode runs Eddie without a default route, which means
+    /// its post-connect DNS check can never pass and must be switched off.
+    #[test]
+    fn out_mode_disables_the_dns_check() {
+        let options = StartOptions {
+            ipv4_mode: Some("out".into()),
+            ..Default::default()
+        };
+        let args = build_args(&options, Path::new("/tmp/nimbus-profile"));
+        assert!(args.iter().any(|arg| arg == "--network.ipv4.mode=out"));
+        assert!(args.iter().any(|arg| arg == "--dns.check=false"));
+        assert!(args.iter().any(|arg| arg == "--dns.mode=none"));
+
+        // The default mode must not touch the DNS options at all.
+        let default = build_args(&StartOptions::default(), Path::new("/tmp/nimbus-profile"));
+        assert!(!default.iter().any(|arg| arg.starts_with("--dns.")));
+        assert!(!default.iter().any(|arg| arg.starts_with("--network.ipv4.mode=")));
+
+        // Exclude mode keeps the normal tunnel and the normal checks.
+        let in_mode = StartOptions {
+            ipv4_mode: Some("in".into()),
+            ..Default::default()
+        };
+        let args = build_args(&in_mode, Path::new("/tmp/nimbus-profile"));
+        assert!(args.iter().any(|arg| arg == "--network.ipv4.mode=in"));
+        assert!(!args.iter().any(|arg| arg.starts_with("--dns.check=")));
     }
 
     /// The engine must not be tied to the transient worker that calls

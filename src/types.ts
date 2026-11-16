@@ -1,3 +1,4 @@
+import type { AppSplitConfig, RunningApp } from "./appSplit";
 import type { SplitTunnelConfig } from "./splitTunnel";
 
 export type ConnState =
@@ -65,6 +66,22 @@ export interface EngineApi {
   setSplitTunnel: (config: SplitTunnelConfig) => void;
   /** `routes.custom` used by the session being connected; null before any connect. */
   splitTunnelApplied: string | null;
+  /**
+   * App-based include mode: only the selected apps use the VPN. Requires Eddie
+   * to run with `network.ipv4.mode=out` and the `nimbus-helper` service.
+   */
+  appSplit: AppSplitConfig;
+  setAppSplit: (config: AppSplitConfig) => void;
+  /** Applications the helper can see for this user, for the picker. */
+  runningApps: RunningApp[];
+  /** Re-enumerate running applications. */
+  refreshApps: () => Promise<void>;
+  /** False when the `nimbus-helper` service is not installed or not running. */
+  appSplitAvailable: boolean;
+  /** Last error from the helper, shown next to the picker. */
+  appSplitError: string | null;
+  /** Apps the active session is steering; null when no app session is applied. */
+  appSplitApplied: string[] | null;
   stats: Stats;
   favorites: string[];
   recent: string[];

@@ -15,6 +15,8 @@ import {
   serializeSplitTunnel,
 } from "./splitTunnel";
 import type { SplitTunnelConfig } from "./splitTunnel";
+import { loadAppSplit, saveAppSplit } from "./appSplit";
+import type { AppSplitConfig, RunningApp } from "./appSplit";
 
 const SAMPLES = 56;
 
@@ -81,6 +83,46 @@ function mockLatency(s: ServerInfo): number {
  * Simulated engine for browser previews (`vite dev`, screenshots, docs).
  * It mirrors the live adapter's surface so screens never branch on the mode.
  */
+/** A plausible running-app list so the picker is explorable in preview mode. */
+const MOCK_RUNNING_APPS: RunningApp[] = [
+  {
+    id: "helium-browser",
+    name: "Helium",
+    icon: "helium",
+    exePath: "/opt/helium/helium-browser",
+    pids: [4211, 4213, 4219],
+    uids: [1000],
+    gui: true,
+  },
+  {
+    id: "firefox",
+    name: "Firefox",
+    icon: "firefox",
+    exePath: "/usr/lib/firefox/firefox",
+    pids: [5102, 5110],
+    uids: [1000],
+    gui: true,
+  },
+  {
+    id: "discord",
+    name: "Discord",
+    icon: "discord",
+    exePath: "/usr/share/discord/Discord",
+    pids: [6203],
+    uids: [1000],
+    gui: true,
+  },
+  {
+    id: "steam",
+    name: "Steam",
+    icon: "steam",
+    exePath: "/usr/bin/steam",
+    pids: [7021],
+    uids: [1000],
+    gui: true,
+  },
+];
+
 export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi {
   const [state, setState] = useState<ConnState>(initialConn);
   const [serverId, setServerId] = useState(() => {
@@ -103,6 +145,8 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
   );
   const splitTunnelRef = useRef(splitTunnel);
   const [splitTunnelApplied, setSplitTunnelApplied] = useState<string | null>(null);
+  const [appSplit, setAppSplitState] = useState<AppSplitConfig>(() => loadAppSplit());
+  const [appSplitApplied, setAppSplitApplied] = useState<string[] | null>(null);
   const [stats, setStats] = useState<Stats>(() => initial(initialConn()));
   const [error, setError] = useState<string | null>(null);
   const [login, setLogin] = useState("");
@@ -135,6 +179,10 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
   useEffect(() => {
     saveSplitTunnel(splitTunnel);
   }, [splitTunnel]);
+
+  useEffect(() => {
+    saveAppSplit(appSplit);
+  }, [appSplit]);
 
   const setSplitTunnel = useCallback((next: SplitTunnelConfig) => {
     splitTunnelRef.current = next;
@@ -173,6 +221,7 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     if (state === "connecting" || state === "connected") return;
     setState("connecting");
     setSplitTunnelApplied(serializeSplitTunnel(splitTunnelRef.current));
+    setAppSplitApplied(appSplit.enabled ? appSplit.apps : null);
     if (timer.current !== null) window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => {
       setState("connected");
@@ -188,6 +237,8 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     timer.current = window.setTimeout(() => {
       setState("disconnected");
       setStats(initial("disconnected"));
+      setSplitTunnelApplied(null);
+      setAppSplitApplied(null);
     }, 550);
   }, [state]);
 
@@ -200,6 +251,7 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     if (state === "connected" || state === "connecting") {
       setState("connecting");
       setSplitTunnelApplied(serializeSplitTunnel(splitTunnelRef.current));
+      setAppSplitApplied(appSplit.enabled ? appSplit.apps : null);
       if (timer.current !== null) window.clearTimeout(timer.current);
       timer.current = window.setTimeout(() => {
         setState("connected");
@@ -216,6 +268,7 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
       if (state === "connected" || state === "connecting") {
         setState("connecting");
         setSplitTunnelApplied(serializeSplitTunnel(splitTunnelRef.current));
+      setAppSplitApplied(appSplit.enabled ? appSplit.apps : null);
         if (timer.current !== null) window.clearTimeout(timer.current);
         timer.current = window.setTimeout(() => {
           setState("connected");
@@ -253,6 +306,13 @@ export function useMockEngine(servers: ServerInfo[], enabled = true): EngineApi 
     splitTunnel,
     setSplitTunnel,
     splitTunnelApplied,
+    appSplit,
+    setAppSplit: (next: AppSplitConfig) => setAppSplitState(next),
+    runningApps: MOCK_RUNNING_APPS,
+    refreshApps: async () => {},
+    appSplitAvailable: true,
+    appSplitError: null,
+    appSplitApplied,
     stats,
     favorites,
     recent,

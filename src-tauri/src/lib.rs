@@ -1,6 +1,7 @@
 mod credentials;
 mod engine;
 mod installer;
+mod split;
 
 use tauri::Manager;
 
@@ -21,7 +22,12 @@ pub fn run() {
       engine::engine_disarm,
       engine::engine_send,
       engine::engine_stop,
-      engine::servers_latency
+      engine::servers_latency,
+      split::split_available,
+      split::split_apps,
+      split::split_status,
+      split::split_begin,
+      split::split_end
     ])
     .setup(|app| {
       if cfg!(debug_assertions) {

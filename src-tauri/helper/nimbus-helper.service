@@ -1,0 +1,24 @@
+[Unit]
+Description=Nimbus app split tunneling helper
+Documentation=https://github.com/coffeecode3d/nimbus
+# Started early and kept running so Nimbus can install a policy the moment a
+# tunnel comes up, and remove it the moment it goes away.
+Before=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/libexec/nimbus/nimbus-helper serve --socket /run/nimbus/helper.sock
+RuntimeDirectory=nimbus
+RuntimeDirectoryMode=0755
+Restart=on-failure
+RestartSec=2
+
+# The helper writes to /sys/fs/cgroup and drives iproute2/iptables, so the
+# usual filesystem and capability hardening does not apply. It is still a
+# fixed, non-shelling binary that only accepts structured requests over its
+# socket, and it only ever adopts processes owned by the caller.
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -60,14 +60,28 @@ export function ConnectScreen({
   const appliedSplitCount = engine.splitTunnelApplied
     ? engine.splitTunnelApplied.split(";").filter(Boolean).length
     : 0;
+  // App include mode inverts the question: the tunnel carries *only* these
+  // apps, so "protected" applies to them and not to the rest of the desktop.
+  const appliedApps = engine.appSplitApplied ?? [];
+  const selectedApps = engine.appSplit.enabled ? engine.appSplit.apps : [];
+  const plural = (n: number) => (n === 1 ? "" : "s");
+  const appSub =
+    state === "connected" && appliedApps.length > 0
+      ? `Only ${appliedApps.length} selected app${plural(appliedApps.length)} ${
+          appliedApps.length === 1 ? "uses" : "use"
+        } the VPN; everything else uses your normal connection.`
+      : state === "disconnected" && selectedApps.length > 0
+        ? `Only ${selectedApps.length} selected app${plural(selectedApps.length)} will use the VPN.`
+        : null;
   const sub =
-    state === "connected" && appliedSplitCount > 0
+    appSub ??
+    (state === "connected" && appliedSplitCount > 0
       ? `${appliedSplitCount} destination${
           appliedSplitCount === 1 ? "" : "s"
         } bypass the VPN and are not protected by it.`
       : state === "disconnected" && splitCount > 0
         ? `${splitCount} destination${splitCount === 1 ? "" : "s"} will stay outside the VPN.`
-        : copy.sub;
+        : copy.sub);
 
   const copyIp = async () => {
     try {

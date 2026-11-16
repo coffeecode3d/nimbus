@@ -105,6 +105,16 @@ pub fn list() -> Vec<App> {
     apps
 }
 
+/// Running applications filtered to one owner, or all of them when `uid` is
+/// `None`.
+pub fn list_for(uid: Option<u32>) -> Vec<App> {
+    let mut list = list();
+    if let Some(uid) = uid {
+        list.retain(|app| app.uids.contains(&uid));
+    }
+    list
+}
+
 /// PIDs whose executable matches one of `apps`.
 ///
 /// Matching is case-insensitive on the basename, or exact on the full path, so

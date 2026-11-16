@@ -55,6 +55,7 @@ export function SettingsScreen({
   const [splitInput, setSplitInput] = useState("");
   const [splitLabel, setSplitLabel] = useState("");
   const [splitError, setSplitError] = useState<string | null>(null);
+  const [appQuery, setAppQuery] = useState("");
 
   const split = engine.splitTunnel;
   const splitRoutes = serializeSplitTunnel(split);
@@ -62,6 +63,27 @@ export function SettingsScreen({
     engine.splitTunnelApplied !== null &&
     engine.splitTunnelApplied !== splitRoutes &&
     (engine.connected || engine.state === "connecting");
+
+  const appSplit = engine.appSplit;
+  const appSplitPending =
+    engine.appSplitApplied !== null &&
+    engine.appSplitApplied.join(",") !== appSplit.apps.join(",") &&
+    (engine.connected || engine.state === "connecting");
+  const appQueryText = appQuery.trim().toLowerCase();
+  const visibleApps = engine.runningApps.filter(
+    (app) =>
+      !appQueryText ||
+      app.name.toLowerCase().includes(appQueryText) ||
+      app.id.toLowerCase().includes(appQueryText),
+  );
+
+  const toggleApp = (id: string) => {
+    const has = appSplit.apps.includes(id);
+    engine.setAppSplit({
+      enabled: true,
+      apps: has ? appSplit.apps.filter((app) => app !== id) : [...appSplit.apps, id],
+    });
+  };
 
   const addSplitRule = (raw: string, label: string) => {
     const parsed = parseCidr(raw);
@@ -420,6 +442,126 @@ export function SettingsScreen({
                   ? "Applies on your next connection."
                   : "Split tunneling turns off on your next connection."}
               </span>
+              <Button variant="quiet" onClick={engine.reconnect}>
+                Reconnect
+              </Button>
+            </div>
+          )}
+        </Section>
+
+        <Section
+          title="App split tunneling"
+          note="Only the apps you choose use the VPN. A small root helper installs a cgroup, a firewall mark and a policy route; Nimbus itself never runs as root. Linux only for now."
+        >
+          <Field
+            title="Only selected apps use the VPN"
+            desc="Everything else keeps your normal connection. Requires the Nimbus helper service."
+          >
+            <Toggle
+              label="App split tunneling"
+              checked={appSplit.enabled}
+              onChange={(enabled) => engine.setAppSplit({ ...appSplit, enabled })}
+            />
+          </Field>
+
+          {!engine.appSplitAvailable && (
+            <p className="split-warning" role="status">
+              The helper service is not installed, so this cannot be turned on yet. Install it
+              once with <code>sudo scripts/install-helper.sh</code> from the Nimbus source
+              checkout.
+            </p>
+          )}
+
+          {engine.appSplitAvailable && appSplit.enabled && (
+            <div className="split-panel">
+              <div className="app-toolbar">
+                <input
+                  className="text-input split-input"
+                  type="text"
+                  value={appQuery}
+                  placeholder="Search running apps"
+                  aria-label="Search running apps"
+                  spellCheck={false}
+                  onChange={(e) => setAppQuery(e.target.value)}
+                />
+                <Button variant="quiet" onClick={() => void engine.refreshApps()}>
+                  Refresh
+                </Button>
+              </div>
+
+              {appSplit.apps.length > 0 ? (
+                <ul className="split-rules">
+                  {appSplit.apps.map((id) => {
+                    const app = engine.runningApps.find((entry) => entry.id === id);
+                    return (
+                      <li key={id} className="split-rule">
+                        <span className="split-cidr">{app?.name ?? id}</span>
+                        <span className="split-rule-label mono">{id}</span>
+                        <button
+                          type="button"
+                          className="split-remove"
+                          aria-label={`Remove ${app?.name ?? id}`}
+                          title="Remove"
+                          onClick={() => toggleApp(id)}
+                        >
+                          <X size={13} />
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="split-empty">
+                  No apps selected yet. Pick one below — Helium, for example.
+                </p>
+              )}
+
+              {visibleApps.length > 0 ? (
+                <ul className="app-list">
+                  {visibleApps.map((app) => {
+                    const selected = appSplit.apps.includes(app.id);
+                    return (
+                      <li key={app.id}>
+                        <label className={`app-row${selected ? " selected" : ""}`}>
+                          <input
+                            type="checkbox"
+                            checked={selected}
+                            onChange={() => toggleApp(app.id)}
+                          />
+                          <span className="app-name">{app.name}</span>
+                          <span className="app-id mono">{app.id}</span>
+                          <span className="app-pids">{app.pids.length} pid</span>
+                        </label>
+                      </li>
+                    );
+                  })}
+                </ul>
+              ) : (
+                <p className="split-empty">
+                  {engine.runningApps.length === 0
+                    ? "No running applications were reported by the helper."
+                    : "No running app matches that search."}
+                </p>
+              )}
+
+              {engine.appSplitError && (
+                <p className="split-error" role="alert">
+                  {engine.appSplitError}
+                </p>
+              )}
+
+              <p className="split-warning">
+                Selected apps send their traffic through the VPN; everything else keeps your real
+                IP address. Restart an app after selecting it so its connections are re-created.
+                DNS for the selected apps still goes through your normal resolver for now, which
+                reveals the names you look up.
+              </p>
+            </div>
+          )}
+
+          {appSplitPending && (
+            <div className="split-pending">
+              <span>Applies on your next connection.</span>
               <Button variant="quiet" onClick={engine.reconnect}>
                 Reconnect
               </Button>

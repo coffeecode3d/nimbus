@@ -166,6 +166,12 @@ fn reset_state() {
 }
 
 impl Session {
+    /// Whether the tunnel device is still there. The daemon polls this so a
+    /// dropped VPN cannot leave a mark pointing at a device that has gone.
+    pub fn tunnel_present(&self) -> bool {
+        Path::new(&format!("/sys/class/net/{}", self.tunnel)).exists()
+    }
+
     /// Install the whole policy for `apps` over `tunnel`.
     ///
     /// `owner` is the uid whose processes may be adopted (see

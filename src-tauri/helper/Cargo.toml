@@ -7,6 +7,10 @@ license = "GPL-3.0-or-later"
 edition = "2024"
 rust-version = "1.90"
 
+[lib]
+name = "nimbus_helper"
+path = "src/lib.rs"
+
 [[bin]]
 name = "nimbus-helper"
 path = "src/main.rs"

@@ -344,6 +344,12 @@ inline script, so there is no flash of the wrong theme on launch.
 11. **Parity checks** — DNS-leak test, suspend/resume, network change, IPv6.
 12. ~~**Split tunneling** — IPv4/IP-subnet exclusions in Settings, handed to
     Eddie as `routes.custom`.~~
+13. **Per-app split tunneling (Linux)** — Settings → App split tunneling runs
+    only the selected apps inside the VPN, through a small root helper
+    (`nimbus-helper`) that owns a cgroup, a firewall mark and a policy route.
+    Needs one install step: `sudo scripts/install-helper.sh`. DNS for the
+    selected apps is not redirected yet, and Windows still needs a signed WFP
+    driver or an upstream Eddie option.
 
 ### Windows and split tunnelling
 
@@ -361,10 +367,17 @@ tunnel, and no `split tunnel` code exists in `Lib.Core`. It does support
 **destination-route** exceptions through `routes.custom`
 (`address-or-range,in|out,note;…`), applied when the tunnel is built. Nimbus
 exposes those as **Settings → Split tunneling** (IPv4, exclude mode, reconnect
-required), with no engine changes. Per-app split tunnelling would need Nimbus
-to add its own privileged routing component (cgroups/nftables on Linux, WFP on
-Windows), which is a much larger, security-sensitive project and is deliberately
-out of scope for v1.
+required), with no engine changes. Per-app split tunnelling needs a
+privileged routing component of Nimbus's own (cgroups plus policy routing on
+Linux, WFP on Windows). The Linux half now exists: `src-tauri/helper` is a root
+systemd service that puts the selected applications in a cgroup, marks their
+packets, and routes them through Eddie's tunnel while everything else keeps the
+physical default route. Install it with `sudo scripts/install-helper.sh`; see
+`docs/app-split-tunneling-plan.md` for the design and the two findings that
+shaped it (Eddie's post-connect DNS check cannot pass in `out` mode, and
+nftables cannot reroute locally generated packets from the OUTPUT hook — the
+xtables `MARK` target can). Windows still needs a signed WFP driver or an
+upstream Eddie option.
 
 ## Legal
 

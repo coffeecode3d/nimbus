@@ -274,12 +274,19 @@ Decided order for the Linux helper:
    enumeration, plan generation, cgroup, mark, policy rule, table 100,
    `/proc` watcher, teardown, `status`, and a `--self-test`. Verified end to end
    against a dummy device, §9.2.
-3. **Nimbus integration** — Tauri commands (list apps, begin/end a session),
-   pass `network.ipv4.mode=out` + `dns.check=false` + `dns.mode=none` to Eddie
-   for include mode, start the helper via `pkexec` with `--parent-death`, and
-   tear it down before disconnecting.
-4. **App picker** — running apps grouped by executable with icons,
-   multi-select, persisted in `nimbus.splitTunnel.apps`.
+3. **Nimbus integration** — done. `serve` is a systemd service
+   (`src-tauri/helper/nimbus-helper.service`, installed by
+   `scripts/install-helper.sh`); `src-tauri/src/split.rs` is the socket client
+   and exposes `split_available` / `split_apps` / `split_status` / `split_begin`
+   / `split_end`. Include mode passes `network.ipv4.mode=out` +
+   `dns.check=false` + `dns.mode=none`, installs the policy after Eddie reports
+   connected, and removes it before disconnecting. A failure to install the
+   policy fails **closed**: it disconnects, because in `out` mode nothing is in
+   the VPN until the policy lands.
+4. **App picker** — done. Settings → App split tunneling lists running apps
+   with desktop names, multi-select, search and refresh, persisted under
+   `nimbus.appSplit`. The Connect screen states that only those apps use the
+   VPN.
 5. **DNS** — redirect plus the tunnel-bound forwarder. Without it, included
    apps leak their DNS queries over the physical link.
 6. **Harden** — rtnetlink teardown when the tunnel disappears, reconnect

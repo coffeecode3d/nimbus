@@ -280,6 +280,12 @@ Crate `src-tauri/helper-win` (`nimbus-split-win`):
 - `agent` — the decision layer: selected Win32 paths → device paths the driver
   matches on, plus the process tree and addresses to register. The OS is behind
   a `System` trait, so the flow is tested with a fake (5 tests).
+- `windows_system` — the `System` implementation: `QueryDosDeviceW` for device
+  paths, `CreateToolhelp32Snapshot` + `QueryFullProcessImageNameW` for the tree
+  (opening with `PROCESS_QUERY_LIMITED_INFORMATION`, the least right that
+  works), and `GetAdaptersAddresses` for the tunnel and physical addresses.
+  Anything it cannot identify is left as zero, which the driver reads as "that
+  family is unavailable" rather than a guess.
 - `driver` — opens `\\.\MULLVADSPLITTUNNEL`, walks
   `STARTED → INITIALIZED → READY → ENGAGED`, drains events. Type-checked
   against `x86_64-pc-windows-gnu`; not yet exercised on Windows.
@@ -288,14 +294,59 @@ Remaining before it ships:
 
 1. Vendor the signed `mullvad-split-tunnel.sys` (from their installer) and
    install it from NSIS, with the GPL-3.0 attribution already in `NOTICE`.
-2. Implement `System` with Windows APIs: `QueryDosDeviceW` for device paths,
-   `CreateToolhelp32Snapshot`/`QueryFullProcessImageNameW` for the tree,
-   `GetAdaptersAddresses` for the tunnel and physical addresses.
-3. Wrap the agent in a Windows service with a named-pipe API, so the
+2. Wrap the agent in a Windows service with a named-pipe API, so the
    unprivileged UI can send the exclude list.
-4. UI: an exclude-mode toggle on the Apps page for Windows.
-5. Test on a real Windows machine — none of the above can be validated from the
-   development host used so far.
+3. UI: an exclude-mode toggle on the Apps page for Windows.
+4. Validate the state machine against the real driver in a Windows VM.
+
+### 5.4 Test VM
+
+Testing this from Linux needs a real Windows guest, because the driver only
+loads on Windows and only when it is signed. The development laptop runs:
+
+    ~/VMs/win11/run.sh cd    # first boot: unattended install
+    ~/VMs/win11/run.sh disk  # afterwards
+
+QEMU/KVM with OVMF, an unattended Windows 11 Enterprise Evaluation install, a
+local administrator (`nimbus`) and OpenSSH enabled on first logon, so the guest
+is driven over `ssh -p 2222` instead of the GUI. VNC on `127.0.0.1:5901` and a
+QEMU monitor socket exist for the moments a screenshot is the only way to see
+what is happening.
+
+Installing Windows unattended on top of QEMU cost a day of debugging. The
+findings, in the order they bit:
+
+- **`/tmp` is tmpfs.** An 8 GB ISO downloaded to `/tmp` fills RAM and dies at
+  exactly 8 GB with "failure writing output to destination". Download to disk.
+- **`swtpm` may be unloadable** (built against a newer OpenSSL than the host
+  has). The answer file therefore carries the `Setup\LabConfig` bypasses and the
+  TPM device is optional.
+- **An explicit `ich9-ahci` leaves nothing on the default bus.** Any drive given
+  without `if=none`/`-device` ends up in `/machine/unattached` and is invisible
+  to the firmware — including the CD and the answer file. Attach every drive to
+  a stated port.
+- **Stale NVRAM hides the DVD.** Repeated failed boots fill the variable store;
+  deleting `vars.fd` restores the `UEFI QEMU DVD-ROM` entry.
+- **The "press any key to boot from CD" prompt expires in about five seconds**,
+  so keys have to be sent through the firmware boot, not once at start.
+- **`autounattend.xml` is only honoured from the root of the installation
+  media.** A FAT disk, a USB stick and a floppy were all ignored (and q35 has no
+  floppy controller anyway).
+- **The hardware gate is evaluated in `windowsPE`, not `specialize`.** Writing
+  `BypassTPMCheck` from the `specialize` pass is too late — Setup has already
+  refused. It must be a `RunSynchronous` command in the `windowsPE` pass.
+- **Windows media is a UDF/ISO9660 hybrid.** `install.wim` is over 4 GiB, so
+  rebuilding the ISO as plain ISO9660 turns it into multi-extent continuation
+  areas and Setup dies part-way through applying the image ("installation has
+  failed" at 55%). Either keep UDF, or — what we do, because this `xorriso` has
+  no UDF writer — split the image with `wimlib-imagex split install.wim
+  install.swm 3800` so every file is under 4 GiB. This is the same trick Rufus
+  uses for FAT32 sticks, and Setup reads `install.swm` transparently.
+- **A remastered ISO must keep the El Torito UEFI entry's load size.** `xorriso`
+  `-boot_image any replay` writes `load size 0` and OVMF refuses it with
+  `No mapping`; `keep` preserves the value but can relocate the boot image past
+  the 4 GB boundary, which also yields `No mapping`. Building from an extracted
+  tree with `-as mkisofs` puts the boot images near the start and works.
 
 ## 5a. Windows design (original notes)
 
